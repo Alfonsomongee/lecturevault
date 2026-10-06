@@ -1,5 +1,10 @@
 # Dependencies
 node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
 
 # Build output
 dist/

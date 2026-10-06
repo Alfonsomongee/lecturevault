@@ -11,6 +11,7 @@ export interface BrowserManagerConfig {
   viewportHeight: number;
   timeoutMs: number;
   screenshotDir: string;
+  args?: string[];
 }
 
 /**
@@ -53,6 +54,10 @@ export class BrowserManager {
         width: this.config.viewportWidth,
         height: this.config.viewportHeight,
       },
+      args: this.config.args || [
+        '--autoplay-policy=no-user-gesture-required',
+        '--disable-web-security',
+      ],
     });
 
     this.context.setDefaultNavigationTimeout(this.config.timeoutMs);

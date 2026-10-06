@@ -28,29 +28,33 @@ a clean local dashboard.
 
 - [Node.js](https://nodejs.org/) ≥ 20.0.0
 - npm (comes with Node.js)
+- [Python](https://www.python.org/) 3.10 - 3.12 (for local speech-to-text with `faster-whisper`)
+- [FFmpeg](https://ffmpeg.org/) (e.g. `winget install Gyan.FFmpeg` on Windows)
 
-## Quick Start
+## Quick Start (New Machine Setup)
 
 ```bash
 # 1. Clone the repository
 git clone <repo-url>
 cd lecturevault
 
-# 2. Install dependencies
+# 2. Install Node.js dependencies
 npm install
 
-# 3. Configure
+# 3. Create Python virtual environment and install faster-whisper
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 4. Configure environment variables
 cp .env.example .env
-# Edit .env with your university's LMS URL and course path
+# Edit .env with your LMS URL, course identifier, and allowed hosts
 
-# 4. Run sync (opens browser for manual login)
-npm run sync
+# 5. Build project
+npm run build
 
-# 5. Start dashboard
-npm run serve
-
-# 6. Or do both at once
-npm run dev
+# 6. Capture and transcribe a class
+npm run capture:and:transcribe
 ```
 
 ## Configuration
@@ -161,10 +165,10 @@ See [docs/threat-model.md](docs/threat-model.md) for the full security analysis.
 
 ## Milestone Roadmap
 
-- [x] **Milestone 1**: Metadata extraction and dashboard
-- [ ] **Milestone 2**: Manual verification of Collab2 download/subtitle options
-- [ ] **Milestone 3**: Media download (if permitted)
-- [ ] **Milestone 4**: Transcription via local faster-whisper
+- [x] **Milestone 1**: Metadata extraction and dashboard (accepted against real Collab2)
+- [x] **Milestone 2**: Read-only player capability inspection & sanitization
+- [x] **Milestone 3**: In-browser digital audio capture pipeline (zero mic, FFmpeg 16kHz mono normalization)
+- [x] **Milestone 4**: Local-only faster-whisper speech-to-text proof of concept (TXT/SRT/VTT/JSON, auto-stop)
 
 ## License
 
