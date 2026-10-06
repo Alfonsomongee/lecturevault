@@ -219,7 +219,7 @@ describe('exporters', () => {
     ]);
     expect(lines).toHaveLength(8); // cloze card excluded
     expect(lines[6]!.split('\t')).toEqual([
-      'abc123', 'LectureVault::Simulación FEM', 'Q', 'A<br><br><small>🎧 Clase 3 · 14:20</small>', 'lecturevault Simulación_FEM tema',
+      'abc123', 'LectureVault::Simulación FEM', 'Q', 'A<br><br><small>Clase 3 · 14:20</small>', 'lecturevault Simulación_FEM tema',
     ]);
     expect(lines[7]).toContain('"Dice ""hola"" y &lt;b&gt;"');
     expect(lines[7]).toContain('línea1<br>línea2');

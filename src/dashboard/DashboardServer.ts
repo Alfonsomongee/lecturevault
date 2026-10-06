@@ -273,6 +273,7 @@ export class DashboardServer {
         stats: { ...this.db.getStats(), ...this.study.getStudyStats() },
         courses: this.db.getCourses(),
         catalog: this.catalogPayload(),
+        pending: this.db.getAllRecordings().filter((r) => !r.transcript_id && !r.collab_id.startsWith('local:')).length,
         ai: this.client.hasKey,
       });
     }));

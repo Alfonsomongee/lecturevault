@@ -52,7 +52,7 @@ export function buildAnkiTsv(cards: FlashcardRow[], kind: 'basic' | 'cloze'): st
   ];
 
   for (const c of cards.filter((card) => card.kind === kind)) {
-    const source = `<small>${escapeHtml(`🎧 ${c.recording_title ?? ''} · ${msToClock(c.t_ms)}`.trim())}</small>`;
+    const source = `<small>${escapeHtml(`${c.recording_title ?? ''} · ${msToClock(c.t_ms)}`.trim())}</small>`;
     const back = [c.back ? htmlText(c.back) : '', source].filter(Boolean).join('<br><br>');
     const tags = ['lecturevault', c.course ? ankiTag(c.course) : '', c.tag ? ankiTag(c.tag) : '']
       .filter(Boolean)
@@ -67,8 +67,8 @@ export function buildAnkiTsv(cards: FlashcardRow[], kind: 'basic' | 'cloze'): st
 
 // ── iCalendar ─────────────────────────────────────────────────────────────
 
-const ICS_ICON: Record<string, string> = {
-  exam: '📝', deadline: '⏰', grading: '📊', warning: '⚠️', formula: '∑',
+const KIND_LABEL: Record<string, string> = {
+  exam: 'Examen', deadline: 'Entrega', grading: 'Evaluación', warning: 'Aviso', formula: 'Fórmula',
 };
 
 function icsEscape(text: string): string {
@@ -126,8 +126,7 @@ export function buildIcs(alerts: AlertRow[], options: { now?: Date; calendarName
 
   for (const a of alerts) {
     if (!a.due_date || a.dismissed) continue;
-    const icon = ICS_ICON[a.kind] ?? '•';
-    const summary = `${icon} ${a.text}`.slice(0, 120);
+    const summary = `${KIND_LABEL[a.kind] ?? a.kind}: ${a.text}`.slice(0, 120);
     const description = [
       a.course ? `Asignatura: ${a.course}` : '',
       a.recording_title ? `Clase: ${a.recording_title} (${msToClock(a.t_ms)})` : '',
@@ -192,16 +191,16 @@ export function renderObsidianNote(
 
   const live = alerts.filter((a) => !a.dismissed);
   if (live.length) {
-    parts.push('## ⚠️ Avisos críticos', '');
+    parts.push('## Avisos críticos', '');
     for (const a of live) {
       const due = a.due_date ? ` — **${a.due_date}**` : '';
-      parts.push(`- ${ICS_ICON[a.kind] ?? '•'} ${a.text}${due} _(${msToClock(a.t_ms)})_`);
+      parts.push(`- **${KIND_LABEL[a.kind] ?? a.kind}:** ${a.text}${due} _(${msToClock(a.t_ms)})_`);
     }
     parts.push('');
   }
 
   if (cards.length) {
-    parts.push('## 🃏 Tarjetas', '');
+    parts.push('## Tarjetas', '');
     for (const c of cards) {
       parts.push(c.kind === 'cloze' ? `- ${c.front.replace(/\{\{c\d+::(.+?)\}\}/g, '==$1==')}` : `- **${c.front}** → ${c.back}`);
     }

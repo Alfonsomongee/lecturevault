@@ -1,4 +1,4 @@
-// Search results: grouped by class, highlighted, each hit jumps to the exact moment.
+// Resultados de búsqueda: agrupados por clase, cada coincidencia salta al minuto exacto.
 import { api, html, mount, highlight, msClock, courseLabel } from '../util.js';
 import { state } from '../main.js';
 
@@ -8,10 +8,9 @@ export async function renderSearch(root, params) {
   if (document.activeElement !== input) input.value = q;
 
   if (q.length < 2) {
-    mount(root, html`<div class="page-head"><div><div class="eyebrow">Búsqueda global</div><h1>Busca en todas tus clases</h1>
-      <p>Escribe un término técnico y encuentra en milisegundos cada vez que se dijo, con el minuto exacto. Tolera acentos, plurales y errores del reconocimiento de voz.</p></div></div>
-      <div class="card card-pad"><div class="eyebrow" style="margin-bottom:8px">Prueba con</div>
-        <div class="chip-row">${['restricciones', 'examen', 'Von Mises', 'CYPE', 'foro'].map((s) => html`<a class="btn sm" href="#/search?q=${encodeURIComponent(s)}">${s}</a>`)}</div></div>`);
+    mount(root, html`<h1 class="page-title">Buscar</h1>
+      <p class="page-sub">Escribe un término en el cuadro de la izquierda. Busca en transcripciones y apuntes de todas las clases, sin importar acentos ni plurales, y tolera errores del reconocimiento de voz.</p>
+      <div class="tags">${['restricciones', 'examen', 'Von Mises', 'foro'].map((s) => html`<a class="btn sm" href="#/search?q=${encodeURIComponent(s)}">${s}</a>`)}</div>`);
     return;
   }
 
@@ -26,22 +25,17 @@ export async function renderSearch(root, params) {
   }
 
   mount(root, html`
-    <div class="page-head"><div><div class="eyebrow">Búsqueda global${state.course ? ` · ${courseLabel(state.course)}` : ''}</div>
-      <h1>“${q}”</h1>
-      <p>${data.hits.length ? `${data.hits.length} resultado${data.hits.length === 1 ? '' : 's'} en ${groups.size} clase${groups.size === 1 ? '' : 's'} · ${ms} ms` : 'Sin resultados'}</p></div>
-      <a class="btn" href="#/ask?q=${encodeURIComponent(q)}">💬 Preguntar a la IA</a></div>
-    ${data.corrected.length ? html`<div class="hint-bar">Mostrando resultados para ${data.corrected.map((c) => html`<b>${c.to}</b>`)}
-      (no había «${data.corrected.map((c) => c.from).join('», «')}» en tus clases; el reconocimiento de voz a veces se equivoca con términos técnicos).</div>` : ''}
-    ${data.hits.length === 0 ? html`<div class="card empty-state"><div class="icon">🔎</div><h2>Nada por aquí</h2>
-      <p>Prueba con otra palabra o con menos términos. También puedes <a href="#/ask?q=${encodeURIComponent(q)}">preguntar a la IA</a>.</p></div>`
+    <h1 class="page-title">${q}</h1>
+    <p class="page-sub">${data.hits.length ? `${data.hits.length} ${data.hits.length === 1 ? 'resultado' : 'resultados'} en ${groups.size} ${groups.size === 1 ? 'clase' : 'clases'} (${ms} ms)` : 'Sin resultados'}${state.course ? ` · ${courseLabel(state.course)}` : ''}</p>
+    ${data.corrected.length ? html`<div class="note-banner">Se muestran resultados para <b>${data.corrected.map((c) => c.to).join(', ')}</b>. No aparece «${data.corrected.map((c) => c.from).join('», «')}» en tus clases; el reconocimiento de voz a veces se equivoca con términos técnicos.</div>` : ''}
+    ${data.hits.length === 0 ? html`<div class="empty"><p>Prueba con otra palabra o con menos términos. También puedes <a href="#/ask?q=${encodeURIComponent(q)}" style="text-decoration:underline">hacer la pregunta</a>.</p></div>`
     : [...groups.entries()].map(([id, g]) => html`
-      <section class="card hit-group">
-        <header><a href="#/r/${id}" style="font-weight:700;color:var(--text)">${g.title}</a><span class="badge">${g.course || 'Sin asignatura'}</span>
-          <span class="sub">${g.hits.length} coincidencia${g.hits.length === 1 ? '' : 's'}</span></header>
-        ${g.hits.map((h) => html`<button class="hit" type="button" data-go="#/r/${id}?t=${Math.floor(h.startMs / 1000)}">
-          <span style="color:var(--accent-ink);font-weight:650;font-variant-numeric:tabular-nums;flex:none;padding-top:2px;min-width:44px">${msClock(h.startMs)}</span>
+      <section class="hit-group">
+        <h3><a href="#/r/${id}" style="border-bottom:1px solid var(--border-strong)">${g.title}</a>${g.course ? html`<span class="tag">${g.course.split(' ')[0]}</span>` : ''}</h3>
+        ${g.hits.map((h) => html`<button class="hit" type="button" data-go="#/r/${id}?t=${Math.floor(h.startMs / 1000)}${h.source === 'notes' ? '&tab=notes' : '&tab=transcript'}">
+          <span class="t">${msClock(h.startMs)}</span>
           <span style="min-width:0"><span class="snippet">${highlight(h.snippet)}</span>
-            <span class="sub" style="display:block">${h.source === 'notes' ? '📝 en los apuntes' : '🎙 en la transcripción'}</span></span></button>`)}
+            <span class="muted small" style="display:block">${h.source === 'notes' ? 'En los apuntes' : 'En la transcripción'}</span></span></button>`)}
       </section>`)}
   `);
   root.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { location.hash = b.dataset.go; }));

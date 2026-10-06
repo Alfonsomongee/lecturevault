@@ -1,24 +1,38 @@
-// App shell: state, hash router, sidebar, global search, shortcuts.
-import { api, html, raw, mount, store, initTheme, courseColor, courseLabel, NO_COURSE, toast, isTyping } from './util.js';
+// App shell: state, hash router, sidebar, global search. Preferences live in the server database.
+import { api, html, mount, icon, courseLabel, NO_COURSE, toast, isTyping } from './util.js';
 import { renderLibrary } from './views/library.js';
 import { renderRecording } from './views/recording.js';
 import { renderSearch } from './views/search.js';
 import { renderAgenda } from './views/agenda.js';
 import { renderStudy } from './views/study.js';
 import { renderAsk } from './views/ask.js';
+import { renderSettings } from './views/settings.js';
 
 export const state = {
   courses: [],
   catalog: [],
   stats: {},
+  pending: 0,
   ai: false,
-  course: store.get('lv-course') || '',
+  course: '',
+  theme: 'system',
 };
 export const view = () => document.getElementById('view');
 
+// ── preferences (stored in SQLite via /api/settings) ───────
+function applyTheme() {
+  if (state.theme === 'light' || state.theme === 'dark') document.documentElement.dataset.theme = state.theme;
+  else delete document.documentElement.dataset.theme;
+}
+export async function setTheme(theme) {
+  state.theme = theme;
+  applyTheme();
+  await api('/api/settings', { method: 'PUT', body: { theme } }).catch((e) => toast(e.message, 'err'));
+}
 export function setCourse(course) {
   state.course = course || '';
-  store.set('lv-course', state.course);
+  api('/api/settings', { method: 'PUT', body: { course: state.course } }).catch(() => {});
+  drawChrome();
   renderRoute();
 }
 
@@ -27,11 +41,11 @@ export function applyMeta(data) {
   state.courses = data.courses || [];
   state.catalog = data.catalog || [];
   state.stats = data.stats || {};
+  state.pending = data.pending ?? state.pending;
   state.ai = !!data.ai;
   if (state.course && state.course !== NO_COURSE && !state.courses.some((c) => c.course === state.course) && !state.catalog.some((c) => c.label === state.course)) state.course = '';
   drawChrome();
 }
-
 /** Light endpoint: counts and courses only, not the whole library. */
 export async function refreshMeta() {
   applyMeta(await api('/api/meta'));
@@ -61,10 +75,10 @@ export async function renderRoute() {
     else if (name === 'agenda') await renderAgenda(root);
     else if (name === 'study') await renderStudy(root);
     else if (name === 'ask') await renderAsk(root, params);
+    else if (name === 'settings') { root.classList.add('wide'); await renderSettings(root); }
     else await renderLibrary(root);
   } catch (err) {
-    mount(root, html`<div class="empty-state card"><div class="icon">⚠️</div><h2>No se pudo cargar</h2>
-      <p>${err.message}</p><a class="btn" href="#/">Volver a la biblioteca</a></div>`);
+    mount(root, html`<div class="empty"><h3>No se pudo cargar</h3><p>${err.message}</p><a class="btn" href="#/">Volver a las clases</a></div>`);
   }
   window.scrollTo({ top: 0 });
 }
@@ -72,16 +86,17 @@ export async function renderRoute() {
 function drawNav(active) {
   const s = state.stats;
   const items = [
-    ['', '📚', 'Biblioteca', null],
-    ['agenda', '🗓️', 'Agenda', s.alerts || null],
-    ['study', '🃏', 'Estudiar', s.flashcardsDue || null],
-    ['ask', '💬', 'Preguntar', null],
+    ['', 'library', 'Clases', state.pending ? state.pending : null, false],
+    ['agenda', 'calendar', 'Agenda', s.alerts || null, false],
+    ['study', 'cards', 'Repaso', s.flashcardsDue || null, true],
+    ['ask', 'chat', 'Preguntar', null, false],
   ];
-  mount(document.getElementById('nav'), html`${items.map(([route, icon, label, n]) => html`
-    <a href="#/${route}" ${active === route || (route === '' && (active === 'r' || active === 'search')) ? raw('aria-current="page"') : ''}>
-      <span aria-hidden="true">${icon}</span>${label}${n ? html`<span class="count ${route === 'study' ? 'hot' : ''}">${n}</span>` : ''}
+  mount(document.getElementById('nav'), html`${items.map(([route, ico, label, n, hot]) => html`
+    <a href="#/${route}" ${active === route || (route === '' && (active === 'r' || active === 'search')) ? html`aria-current="page"` : ''}>
+      ${icon(ico)}<span class="clip">${label}</span>${n ? html`<span class="count ${hot ? 'alert' : ''}">${n}</span>` : ''}
     </a>`)}`);
 }
+
 function drawChrome() {
   drawNav(parseHash().parts[0] || '');
   const total = state.courses.reduce((n, c) => n + c.count, 0);
@@ -94,16 +109,11 @@ function drawChrome() {
     ...(counts.get('') ? [{ value: NO_COURSE, label: courseLabel(''), n: counts.get('') }] : []),
   ];
   mount(document.getElementById('side-courses'), html`
-    <button class="course-link" type="button" data-course="" aria-pressed="${state.course === ''}">
-      <span class="dot" style="background:var(--muted)"></span>Todas<small>${total}</small></button>
-    ${entries.map((e) => html`
-      <button class="course-link" type="button" data-course="${e.value}" aria-pressed="${state.course === e.value}" title="${e.label}">
-        <span class="dot" style="background:${courseColor(state.courses, e.value === NO_COURSE ? '' : e.value)}"></span><span class="clip">${e.label}</span><small>${e.n}</small></button>`)}`);
+    <button type="button" data-course="" aria-pressed="${state.course === ''}"><span class="clip">Todas</span><span class="count">${total}</span></button>
+    ${entries.map((e) => html`<button type="button" data-course="${e.value}" aria-pressed="${state.course === e.value}" title="${e.label}">
+      <span class="clip">${e.label}</span><span class="count">${e.n}</span></button>`)}`);
   mount(document.getElementById('side-foot'), html`
-    <div class="ai-state ${state.ai ? 'on' : ''}"><i></i>${state.ai ? 'IA de Gemini activa' : 'IA desactivada'}</div>
-    ${state.ai ? '' : html`<span>Añade <code>GEMINI_API_KEY</code> a <code>.env</code> para generar apuntes, avisos y tarjetas.</span>`}
-    <span>100 % local · tus datos no salen de este equipo salvo el texto que envías a Gemini.</span>`);
-  document.getElementById('last-sync').textContent = `Actualizado ${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`;
+    <a href="#/settings" ${parseHash().parts[0] === 'settings' ? html`aria-current="page"` : ''}>${icon('settings')}<span class="clip">Ajustes</span></a>`);
 }
 
 document.getElementById('side-courses').addEventListener('click', (e) => {
@@ -113,6 +123,7 @@ document.getElementById('side-courses').addEventListener('click', (e) => {
 
 // Global search: type anywhere, results update as you type
 const input = document.getElementById('global-search');
+mount(document.getElementById('search-ico'), icon('search', 14));
 let timer;
 document.getElementById('search-form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -128,19 +139,20 @@ input.addEventListener('input', () => {
 export function go(hash) { if (location.hash === hash) renderRoute(); else location.hash = hash; }
 
 addEventListener('keydown', (e) => {
-  const typing = isTyping();
-  if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
+  if ((e.key === '/' && !isTyping()) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
     e.preventDefault();
     input.focus();
     input.select();
   }
 });
-
 addEventListener('hashchange', renderRoute);
 
 (async function boot() {
-  initTheme();
   try {
+    const { settings } = await api('/api/settings');
+    state.theme = settings.theme || 'system';
+    state.course = settings.course || '';
+    applyTheme();
     await refreshMeta();
   } catch (err) {
     toast(`No se pudo conectar con el servidor: ${err.message}`, 'err', 8000);
@@ -148,4 +160,3 @@ addEventListener('hashchange', renderRoute);
   await renderRoute();
   setInterval(() => { refreshMeta().catch(() => {}); }, 60000);
 })();
-

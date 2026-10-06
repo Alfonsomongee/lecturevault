@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light dark">
-  <title>LectureVault — Campus</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%232a78d6'/%3E%3Ctext x='16' y='22' font-size='18' text-anchor='middle'%3E🎓%3C/text%3E%3C/svg%3E">
+  <title>LectureVault</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2337352f'/%3E%3Cpath d='M9 8v16h14' stroke='white' stroke-width='3' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/css/app.css">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <script src="/vendor/marked.js" defer></script>
@@ -16,28 +16,21 @@
 <body>
   <div class="app">
     <aside class="sidebar" aria-label="Navegación">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">🎓</span> LectureVault</div>
+      <div class="workspace">LectureVault</div>
+      <form class="side-search" id="search-form" role="search" autocomplete="off">
+        <span id="search-ico"></span>
+        <label class="sr-only" for="global-search">Buscar en todas las clases</label>
+        <input id="global-search" type="search" placeholder="Buscar" maxlength="200">
+        <kbd aria-hidden="true">/</kbd>
+      </form>
       <nav class="nav" id="nav" aria-label="Secciones"></nav>
       <div class="side-courses">
         <div class="side-title">Asignaturas</div>
         <div class="nav" id="side-courses"></div>
       </div>
-      <div class="side-foot" id="side-foot"></div>
+      <div class="side-foot nav" id="side-foot"></div>
     </aside>
-    <div class="main">
-      <header class="topbar">
-        <form class="searchbox" id="search-form" role="search" autocomplete="off">
-          <span class="ico" aria-hidden="true">🔎</span>
-          <label class="sr-only" for="global-search">Buscar en todas tus clases</label>
-          <input id="global-search" type="search" placeholder="Busca en todas tus clases: «restricciones en Ansys»…" maxlength="200">
-          <kbd aria-hidden="true">/</kbd>
-        </form>
-        <span class="spacer"></span>
-        <span class="sync-info sub" id="last-sync"></span>
-        <button class="icon-btn" id="theme-btn" type="button" title="Cambiar tema" aria-label="Cambiar tema">🌓</button>
-      </header>
-      <main class="page" id="view" tabindex="-1"></main>
-    </div>
+    <main class="main"><div class="page" id="view" tabindex="-1"></div></main>
   </div>
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 </body>

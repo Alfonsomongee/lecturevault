@@ -103,15 +103,27 @@ if subjects change. With it:
 
 ## 4. Dashboard
 
-* **Biblioteca** — classes grouped by course, study progress per course, what's next, today's review.
-* **Clase** — custom audio player (speed, ±10 s, alert markers on the timeline, resume position), synced transcript
-  (click a line to seek, doubtful Whisper segments underlined), notes with clickable `[mm:ss]`, KaTeX formulas, TOC,
-  alerts (confirm / dismiss / edit date), flashcards, glossary. Shortcuts: `Space`, `←/→`, `J/L`.
-* **Búsqueda** (`/` or `Ctrl+K`) — accent-insensitive, prefix, typo-tolerant (ASR errors), notes + transcript, exact minute.
-* **Agenda** — month calendar + deadlines + "keep in mind"; `.ics` export (all or only confirmed).
-* **Estudiar** — Leitner spaced repetition (1/3/7/21 days), cloze cards, Anki export (basic + cloze).
-* **Preguntar** — Q&A over all classes (hybrid BM25 + embeddings, RRF). Every citation is verified against the
-  retrieved text; answers without a verifiable quote are rejected. Works without a key (shows the fragments).
+Plain, document-like interface (no emoji, one accent colour, light/dark). Everything you change is stored in
+`data/lecturevault.db`, never in the browser: preferences (theme, selected subject), playback position, edited notes,
+markers, manual alerts and cards, course assignments.
+
+* **Clases** — recordings grouped by subject; filter by name; tick several and move them to a subject (type `03`).
+  **Pendientes de capturar** lists the Collab2 classes with no local audio yet, each with the exact command to copy
+  (`--course`, `--date`, `--name` already filled in) plus the batch command.
+* **Clase** — editable title, subject and date; sticky audio player (speed, ±10 s, markers for alerts and your own notes,
+  position remembered); tabs: **Apuntes** (rendered Markdown with clickable `[mm:ss]` and formulas; edit in place,
+  copy, download, print, version history, regenerate with AI), **Transcripción** (synced, click to seek, filter, doubtful
+  Whisper segments underlined), **Avisos** (confirm, dismiss, edit date, add or delete your own), **Tarjetas** (create, edit,
+  delete, Anki export), **Marcas** (bookmarks with a note at a minute), **Glosario**. Shortcuts: `Space`, `←/→`, `J/L`.
+  The class can be deleted (audio, transcript and derived data); a Collab2 class then returns to "pendiente".
+* **Buscar** (`/` or `Ctrl+K`) — accent-insensitive, prefix, typo-tolerant, notes + transcript, jumps to the minute.
+* **Agenda** — list or month calendar, add alerts by hand, `.ics` export (all or only confirmed).
+* **Repaso** — spaced repetition (1/3/7/21 days), cloze cards, manage all cards, Anki export.
+* **Preguntar** — Q&A over all classes with verified citations; works without a key (shows fragments).
+* **Ajustes** — theme, AI status, editable subject catalog, one-click database backup (last 10 kept), data paths.
+
+Deleting an AI-generated flashcard archives it, so regenerating never brings it back. Hand-written alerts and cards are
+never overwritten by the AI.
 
 ## 5. Trust rules for AI output
 

@@ -21,9 +21,10 @@ export const mount = (el, tpl) => { el.innerHTML = tpl.__raw; return el; };
 
 export async function api(path, options = {}) {
   const init = { method: options.method || 'GET', headers: {} };
-  if (options.body !== undefined) {
+  // The server only accepts JSON for anything that changes data (a CSRF guard), so even body-less DELETEs send {}
+  if (init.method !== 'GET') {
     init.headers['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(options.body);
+    init.body = JSON.stringify(options.body ?? {});
   }
   const res = await fetch(path, init);
   let data = null;
@@ -80,28 +81,51 @@ export const isoParts = (iso) => {
   return { y, m, d, date: new Date(y, m - 1, d) };
 };
 
+/** Alert kinds: a text label and a muted tag colour (never colour alone). */
 export const KINDS = {
-  exam: { label: 'Examen', icon: '📝', color: 'var(--k-exam)' },
-  deadline: { label: 'Entrega', icon: '⏰', color: 'var(--k-deadline)' },
-  grading: { label: 'Evaluación', icon: '📊', color: 'var(--k-grading)' },
-  warning: { label: 'Aviso', icon: '⚠️', color: 'var(--k-warning)' },
-  formula: { label: 'Fórmula', icon: '∑', color: 'var(--k-formula)' },
+  exam: { label: 'Examen', tag: 'blue', color: 'var(--tag-blue-fg)' },
+  deadline: { label: 'Entrega', tag: 'orange', color: 'var(--tag-orange-fg)' },
+  grading: { label: 'Evaluación', tag: 'green', color: 'var(--tag-green-fg)' },
+  warning: { label: 'Aviso', tag: 'yellow', color: 'var(--tag-yellow-fg)' },
+  formula: { label: 'Fórmula', tag: 'purple', color: 'var(--tag-purple-fg)' },
 };
 export const kindChip = (kind) => {
-  const k = KINDS[kind] || { label: kind, icon: '•', color: 'var(--muted)' };
-  return html`<span class="kind" style="--c:${k.color}">${k.icon} ${k.label}</span>`;
+  const k = KINDS[kind] || { label: kind, tag: 'gray' };
+  return html`<span class="tag tag-${k.tag}">${k.label}</span>`;
 };
 
 /** Sidebar/URL value for recordings that have no course yet */
 export const NO_COURSE = '__none__';
 export const courseLabel = (c) => (!c || c === NO_COURSE ? 'Sin asignatura' : c);
 
-// A stable colour per course so sidebar dots and tables agree
-const COURSE_COLORS = ['var(--k-exam)', 'var(--k-deadline)', 'var(--k-grading)', 'var(--k-formula)', 'var(--k-warning)'];
-export const courseColor = (courses, name) => {
-  const i = courses.findIndex((c) => c.course === name);
-  return COURSE_COLORS[(i < 0 ? 0 : i) % COURSE_COLORS.length];
+// ── line icons (one consistent set, no emoji) ───────────────
+const ICONS = {
+  library: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10v16H5.5A1.5 1.5 0 0 1 4 18.5v-13zM14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14V4z"/>',
+  calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  cards: '<rect x="3" y="7" width="14" height="11" rx="2"/><path d="M7 7V6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>',
+  chat: '<path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-7l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
+  settings: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
+  search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',
+  play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor"/>',
+  pause: '<path d="M8 5h3v14H8zM13 5h3v14h-3z" fill="currentColor"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  trash: '<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/>',
+  edit: '<path d="M5 19l1-4L16 5l3 3L9 18l-4 1z"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  download: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
+  copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1"/>',
+  back: '<path d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4"/>',
+  fwd: '<path d="M20 12a8 8 0 1 1-3-6.2M20 4v4h-4"/>',
+  flag: '<path d="M6 21V4M6 5h11l-2 4 2 4H6"/>',
+  history: '<path d="M4 12a8 8 0 1 0 2.4-5.7M4 5v4h4M12 8v4l3 2"/>',
+  contrast: '<circle cx="12" cy="12" r="8"/><path d="M12 4v16" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
+  chevron: '<path d="M9 6l6 6-6 6"/>',
+  terminal: '<path d="M5 7l5 5-5 5M12 18h7"/>',
 };
+export const icon = (name, size = 16) => raw(
+  `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`
+);
 
 // ── markdown + math + clickable timestamps ─────────────────
 const CLOCK_RE = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g;
@@ -226,7 +250,7 @@ export function highlight(snippet) {
   return raw(esc(snippet).replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>'));
 }
 
-// ── toasts + theme ─────────────────────────────────────────
+// ── toasts + confirm dialog ─────────────────────────────────
 export function toast(message, kind = 'ok', ms = 3800) {
   const host = document.getElementById('toasts');
   const el = document.createElement('div');
@@ -236,20 +260,28 @@ export function toast(message, kind = 'ok', ms = 3800) {
   setTimeout(() => el.remove(), ms);
 }
 
-const store = {
-  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
-};
-export { store };
-
-export function initTheme() {
-  const apply = (t) => { if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; };
-  apply(store.get('lv-theme'));
-  document.getElementById('theme-btn').addEventListener('click', () => {
-    const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-    const cur = document.documentElement.dataset.theme || (dark ? 'dark' : 'light');
-    const next = cur === 'dark' ? 'light' : 'dark';
-    store.set('lv-theme', next);
-    apply(next);
+/** Native <dialog> confirmation; resolves true/false. */
+export function confirmDialog(message, { confirm = 'Aceptar', danger = false, detail = '' } = {}) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'modal';
+    dlg.innerHTML = `<form method="dialog"><p class="modal-title"></p><p class="modal-detail"></p>
+      <div class="modal-actions"><button class="btn" value="no">Cancelar</button><button class="btn ${danger ? 'danger' : 'primary'}" value="yes"></button></div></form>`;
+    dlg.querySelector('.modal-title').textContent = message;
+    dlg.querySelector('.modal-detail').textContent = detail;
+    dlg.querySelector('.modal-detail').hidden = !detail;
+    dlg.querySelector('[value="yes"]').textContent = confirm;
+    dlg.addEventListener('close', () => { const ok = dlg.returnValue === 'yes'; dlg.remove(); resolve(ok); });
+    document.body.append(dlg);
+    dlg.showModal();
   });
+}
+
+/** Copy text to the clipboard (falls back to a hidden textarea on non-secure origins). */
+export async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  const ta = document.createElement('textarea');
+  ta.value = text; document.body.append(ta); ta.select();
+  const ok = document.execCommand('copy'); ta.remove();
+  return ok;
 }
