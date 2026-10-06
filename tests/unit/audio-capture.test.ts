@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AudioCaptureManager } from '../../src/capture/AudioCaptureManager.js';
+import { AudioCaptureManager, buildAtempoFilter } from '../../src/capture/AudioCaptureManager.js';
 import pino from 'pino';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,6 +40,32 @@ describe('AudioCaptureManager Unit Tests', () => {
       const longName = 'a'.repeat(200);
       const sanitized = manager.sanitizeRecordingId(longName);
       expect(sanitized.length).toBeLessThanOrEqual(80);
+    });
+  });
+
+  describe('buildAtempoFilter', () => {
+    it('returns null for normal 1.0x playback speed', () => {
+      expect(buildAtempoFilter(1.0)).toBeNull();
+      expect(buildAtempoFilter(1.002)).toBeNull();
+      expect(buildAtempoFilter(0)).toBeNull();
+      expect(buildAtempoFilter(-1)).toBeNull();
+    });
+
+    it('generates single atempo filter for 2.0x speedup', () => {
+      expect(buildAtempoFilter(2.0)).toBe('atempo=0.5');
+    });
+
+    it('chains multiple atempo filters for 4.0x speedup', () => {
+      expect(buildAtempoFilter(4.0)).toBe('atempo=0.5,atempo=0.5');
+    });
+
+    it('chains 3 atempo filters for 8.0x speedup', () => {
+      expect(buildAtempoFilter(8.0)).toBe('atempo=0.5,atempo=0.5,atempo=0.5');
+    });
+
+    it('handles fractional speedups correctly', () => {
+      expect(buildAtempoFilter(1.5)).toBe('atempo=0.6667');
+      expect(buildAtempoFilter(0.5)).toBe('atempo=2.0');
     });
   });
 

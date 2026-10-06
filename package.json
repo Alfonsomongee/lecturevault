@@ -14,6 +14,7 @@
     "check:hardware": "tsx src/utils/hardware.ts",
     "capture:audio": "tsx src/index.ts capture-audio",
     "capture:and:transcribe": "tsx src/index.ts capture-and-transcribe",
+    "batch:transcribe": "tsx src/index.ts batch-transcribe",
     "transcribe:test": "tsx src/transcriber/transcribe-cli.ts",
     "refine:transcript": "tsx src/ai/refine-cli.ts",
     "serve": "tsx src/index.ts serve",

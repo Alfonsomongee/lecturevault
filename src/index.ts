@@ -21,7 +21,7 @@ import { DashboardServer } from './dashboard/DashboardServer.js';
 import { DiagnosticsManager } from './utils/diagnostics.js';
 import { AudioCaptureManager } from './capture/AudioCaptureManager.js';
 import { runTranscriptionCli } from './transcriber/transcribe-cli.js';
-import type { SyncResult } from './types.js';
+import type { SyncResult, RecordingRow, RecordingStatus } from './types.js';
 
 function askUserConfirmation(question: string): Promise<string> {
   const rl = readline.createInterface({
@@ -494,6 +494,25 @@ async function runInspectPlayer(
   }
 }
 
+/** Helper to format seconds as hh:mm:ss or mm:ss */
+function formatTime(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const hrs = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+/** Helper to render a terminal progress bar */
+function renderBar(pct: number, width: number = 20): string {
+  const filled = Math.min(width, Math.max(0, Math.round((pct / 100) * width)));
+  const empty = width - filled;
+  return '█'.repeat(filled) + '░'.repeat(empty);
+}
+
 /**
  * Guided Audio Capture and Automatic Transcription flow:
  * 1. Open visible Chromium persistent session
@@ -517,6 +536,9 @@ async function runCaptureAndTranscribe(
   let durationSec = 0;
   let model = 'small';
   let customName = '';
+  let speed = 1.0;
+  let silent = false;
+  let headless = false;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--duration' || args[i] === '-d') && args[i + 1]) {
@@ -528,18 +550,25 @@ async function runCaptureAndTranscribe(
     } else if ((args[i] === '--name' || args[i] === '-n') && args[i + 1]) {
       customName = args[i + 1]!;
       i++;
+    } else if ((args[i] === '--speed' || args[i] === '-s') && args[i + 1]) {
+      speed = parseFloat(args[i + 1]!) || 1.0;
+      i++;
+    } else if (args[i] === '--silent' || args[i] === '--mute') {
+      silent = true;
+    } else if (args[i] === '--headless') {
+      headless = true;
     }
   }
 
   capLogger.info('=====================================================');
   capLogger.info('🎙️ LECTUREVAULT — CAPTURA Y TRANSCRIPCIÓN AUTOMÁTICA');
   capLogger.info('=====================================================');
-  capLogger.info({ allowedHosts: config.allowedHosts, durationSec, model }, 'Parámetros de captura');
+  capLogger.info({ allowedHosts: config.allowedHosts, durationSec, model, speed, silent, headless }, 'Parámetros de captura');
 
   const browserManager = new BrowserManager(
     {
       profileDir: config.browserProfileDir,
-      headed: true,
+      headed: !headless,
       viewportWidth: config.browserViewportWidth,
       viewportHeight: config.browserViewportHeight,
       timeoutMs: config.browserTimeoutMs,
@@ -547,6 +576,7 @@ async function runCaptureAndTranscribe(
       args: [
         '--autoplay-policy=no-user-gesture-required',
         '--disable-web-security',
+        ...(silent ? ['--mute-audio'] : []),
       ],
     },
     capLogger
@@ -621,30 +651,15 @@ async function runCaptureAndTranscribe(
     }
 
     // Start audio capture
-    await captureManager.startCapture(hook.frame);
-
-    // Helpers for time formatting and progress bar
-    const formatTime = (seconds: number): string => {
-      const s = Math.max(0, Math.floor(seconds));
-      const hrs = Math.floor(s / 3600);
-      const mins = Math.floor((s % 3600) / 60);
-      const secs = s % 60;
-      if (hrs > 0) {
-        return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-      }
-      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    };
-
-    const renderBar = (pct: number, width: number = 20): string => {
-      const filled = Math.min(width, Math.max(0, Math.round((pct / 100) * width)));
-      const empty = width - filled;
-      return '█'.repeat(filled) + '░'.repeat(empty);
-    };
+    await captureManager.startCapture(hook.frame, speed);
 
     console.log('\n===============================================================');
     console.log('🔴 [GRABANDO AUDIO EN VIVO DEL REPRODUCTOR]');
     console.log('• Detección automática: Se detendrá solo cuando el vídeo llegue al final.');
     console.log('• Los micrófonos están 100% excluidos por diseño.');
+    if (speed !== 1.0) {
+      console.log(`• Velocidad acelerada: ${speed}x (captura ultrarrápida activa).`);
+    }
     if (durationSec > 0) {
       console.log(`• Tiempo límite forzoso configurado: ${durationSec}s.`);
     }
@@ -673,13 +688,15 @@ async function runCaptureAndTranscribe(
       if (progress && progress.hasMedia) {
         const curStr = formatTime(progress.currentTime);
         const durStr = progress.duration > 0 ? formatTime(progress.duration) : '--:--';
+        const remainingRealSecs = (progress.duration - progress.currentTime) / (speed > 0 ? speed : 1.0);
         const remainingStr = progress.duration > progress.currentTime
-          ? formatTime(progress.duration - progress.currentTime)
+          ? formatTime(remainingRealSecs)
           : '00:00';
         const status = progress.isPaused ? '⏸️ En pausa' : '▶️ Grabando';
+        const speedTag = speed !== 1.0 ? ` (${speed}x)` : '';
 
         process.stdout.write(
-          `\r[${renderBar(progress.percentage)}] ${progress.percentage}% | ${curStr} / ${durStr} | Restante: ~${remainingStr} | ${status} | (ENTER para parar)   `
+          `\r[${renderBar(progress.percentage)}] ${progress.percentage}% | ${curStr} / ${durStr} | Restante: ~${remainingStr}${speedTag} | ${status} | (ENTER para parar)   `
         );
 
         // Safe auto-stop verification:
@@ -718,7 +735,7 @@ async function runCaptureAndTranscribe(
 
     // Stop and save
     console.log('\n⏳ Deteniendo y procesando audio...');
-    const result = await captureManager.stopCapture(hook.frame, recId);
+    const result = await captureManager.stopCapture(hook.frame, recId, speed);
 
     console.log('\n===============================================================');
     console.log('✅ CAPTURA DE AUDIO COMPLETADA');
@@ -768,6 +785,389 @@ async function runCaptureAndTranscribe(
   }
 }
 
+/**
+ * Automated Batch Transcription Pipeline:
+ * Processes recordings in batch directly from the local database:
+ * - Queries recordings filtered by status ('new' by default), course, limit, from, to
+ * - Opens persistent browser session once (with optional --silent and --headless)
+ * - Navigates to each recording or launches playback from Collab table
+ * - Accelerates playback (e.g. 2x, 4x, 8x)
+ * - Captures digital audio stream
+ * - Automatically detects end of video
+ * - Restores audio duration and pitch with FFmpeg (atempo filter)
+ * - Transcribes via faster-whisper
+ * - Refines notes via Gemini AI (if GEMINI_API_KEY is present)
+ * - Updates SQLite status to 'processed'
+ * - Loops to next item until all finished
+ */
+async function runBatchTranscribe(
+  config: ReturnType<typeof loadConfig>,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  const batchLogger = logger.child({ component: 'batch-transcribe' });
+
+  // Parse command line arguments
+  const args = process.argv.slice(3);
+  let speed = 1.0;
+  let silent = false;
+  let headless = false;
+  let statusFilter: RecordingStatus | 'all' = 'new';
+  let limit = 0;
+  let fromIdx = 0;
+  let toIdx = 0;
+  let courseFilter = '';
+  let model = 'small';
+  let dryRun = false;
+  let help = false;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--help' || args[i] === '-h') {
+      help = true;
+    } else if ((args[i] === '--speed' || args[i] === '-s') && args[i + 1]) {
+      speed = parseFloat(args[i + 1]!) || 1.0;
+      i++;
+    } else if (args[i] === '--silent' || args[i] === '--mute') {
+      silent = true;
+    } else if (args[i] === '--headless') {
+      headless = true;
+    } else if (args[i] === '--status' && args[i + 1]) {
+      statusFilter = args[i + 1]! as any;
+      i++;
+    } else if ((args[i] === '--limit' || args[i] === '-l') && args[i + 1]) {
+      limit = parseInt(args[i + 1]!, 10) || 0;
+      i++;
+    } else if (args[i] === '--from' && args[i + 1]) {
+      fromIdx = parseInt(args[i + 1]!, 10) || 0;
+      i++;
+    } else if (args[i] === '--to' && args[i + 1]) {
+      toIdx = parseInt(args[i + 1]!, 10) || 0;
+      i++;
+    } else if ((args[i] === '--course' || args[i] === '-c') && args[i + 1]) {
+      courseFilter = args[i + 1]!;
+      i++;
+    } else if ((args[i] === '--model' || args[i] === '-m') && args[i + 1]) {
+      model = args[i + 1]!;
+      i++;
+    } else if (args[i] === '--dry-run') {
+      dryRun = true;
+    }
+  }
+
+  if (help) {
+    console.log(`
+===============================================================
+🎙️ LECTUREVAULT — TRANSCRIPCIÓN EN LOTE (BATCH QUEUE)
+===============================================================
+Uso:
+  npm run batch:transcribe -- [opciones]
+
+Opciones disponibles:
+  --speed, -s <n>       Velocidad de reproducción acelerada (ej: 2, 4, 8). Por defecto: 1.0
+  --silent, --mute      Silenciar altavoces en Chromium (captura interna 100% activa).
+  --headless            Ejecutar Chromium en segundo plano sin ventana gráfica.
+  --status <estado>     Filtrar por estado en BD: 'new' (defecto), 'seen', 'processed', 'all'.
+  --course, -c <texto>  Filtrar grabaciones por asignatura o título.
+  --from <n>            Comenzar a partir del índice o ID indicado.
+  --to <n>              Terminar en el índice o ID indicado.
+  --limit, -l <n>       Número máximo de grabaciones a procesar.
+  --model, -m <nombre>  Modelo faster-whisper (tiny, base, small, medium, large). Defecto: small
+  --dry-run             Muestra la cola de grabaciones sin reproducir ni grabar.
+  --help, -h            Muestra esta ayuda.
+
+Ejemplos:
+  # Transcribir grabaciones nuevas a 4x de velocidad sin sonido de altavoces:
+  npm run batch:transcribe -- --speed 4 --silent
+
+  # Transcribir en segundo plano total (sin ventana y sin sonido):
+  npm run batch:transcribe -- --speed 4 --silent --headless
+
+  # Transcribir solo grabaciones de una asignatura específica:
+  npm run batch:transcribe -- --course "01MUIN" --speed 2 --silent
+
+  # Ver la lista de grabaciones pendientes sin ejecutar nada:
+  npm run batch:transcribe -- --dry-run
+===============================================================
+`);
+    return;
+  }
+
+  const db = new DatabaseManager(config.databasePath, batchLogger);
+  let queue: RecordingRow[] = statusFilter === 'all'
+    ? db.getAllRecordings()
+    : db.getRecordingsByStatus(statusFilter);
+
+  // Filter by course / title
+  if (courseFilter.trim()) {
+    const cf = courseFilter.toLowerCase().trim();
+    queue = queue.filter(r => r.title.toLowerCase().includes(cf) || r.collab_id.toLowerCase().includes(cf));
+  }
+
+  // Filter by from / to
+  if (fromIdx > 0 || toIdx > 0) {
+    queue = queue.filter((r, idx) => {
+      const pos = idx + 1;
+      const afterFrom = fromIdx > 0 ? (pos >= fromIdx || r.id >= fromIdx) : true;
+      const beforeTo = toIdx > 0 ? (pos <= toIdx || r.id <= toIdx) : true;
+      return afterFrom && beforeTo;
+    });
+  }
+
+  // Apply limit
+  if (limit > 0) {
+    queue = queue.slice(0, limit);
+  }
+
+  console.log('\n===============================================================');
+  console.log('🎙️ LECTUREVAULT — PROCESAMIENTO EN LOTE (BATCH QUEUE)');
+  console.log('===============================================================');
+  console.log(`• Grabaciones en cola:    ${queue.length}`);
+  console.log(`• Velocidad acelerada:   ${speed}x ${speed > 1 ? `(ahorro de tiempo: ~${((1 - 1 / speed) * 100).toFixed(0)}%)` : ''}`);
+  console.log(`• Modo de audio:         ${silent ? '🤫 Silencioso (--mute-audio activo)' : '🔊 Altavoces activos'}`);
+  console.log(`• Modo ventana:          ${headless ? '👻 Headless (segundo plano invisible)' : '🖥️ Gráfico (ventana Chromium)'}`);
+  console.log(`• Modelo transcripción:  faster-whisper (${model})`);
+  console.log(`• Refinado con IA:       ${config.geminiApiKey ? '✨ Gemini AI Studio activo' : '❌ Desactivado (sin GEMINI_API_KEY)'}`);
+  console.log('===============================================================\n');
+
+  if (queue.length === 0) {
+    console.log('ℹ️ No hay grabaciones pendientes que coincidan con los filtros.');
+    console.log(`• Filtro de estado: "${statusFilter}" | Asignatura: "${courseFilter || 'todas'}"`);
+    console.log('• Ejecuta "npm run sync" para sincronizar o usa "--status all".\n');
+    db.close();
+    return;
+  }
+
+  if (dryRun) {
+    console.log('📋 Grabaciones que se procesarían:');
+    queue.forEach((r, idx) => {
+      console.log(`  [${idx + 1}] ID: ${r.collab_id} | ${r.title} | ${Math.round(r.duration_seconds / 60)} min | Estado: ${r.status}`);
+      if (r.playback_url) console.log(`      URL: ${r.playback_url}`);
+    });
+    console.log('\n(Modo --dry-run: finalizado sin cambios)\n');
+    db.close();
+    return;
+  }
+
+  const browserManager = new BrowserManager(
+    {
+      profileDir: config.browserProfileDir,
+      headed: !headless,
+      viewportWidth: config.browserViewportWidth,
+      viewportHeight: config.browserViewportHeight,
+      timeoutMs: config.browserTimeoutMs,
+      screenshotDir: config.screenshotDir,
+      args: [
+        '--autoplay-policy=no-user-gesture-required',
+        '--disable-web-security',
+        ...(silent ? ['--mute-audio'] : []),
+      ],
+    },
+    batchLogger
+  );
+
+  browserManager.setupGracefulShutdown();
+
+  let successCount = 0;
+  const failedItems: { title: string; collabId: string; error: string }[] = [];
+
+  try {
+    batchLogger.info('Lanzando sesión de navegador para procesamiento en lote...');
+    const context = await browserManager.launch();
+    const mainPage = await browserManager.getPage();
+
+    for (let i = 0; i < queue.length; i++) {
+      const rec = queue[i]!;
+      console.log(`\n===============================================================`);
+      console.log(`▶️ [${i + 1}/${queue.length}] PROCESANDO: "${rec.title}"`);
+      console.log(`• ID:       ${rec.collab_id}`);
+      console.log(`• Duración: ~${Math.round(rec.duration_seconds / 60)} min`);
+      console.log(`• Velocidad: ${speed}x`);
+      console.log(`===============================================================`);
+
+      let playerPage = mainPage;
+      const captureManager = new AudioCaptureManager(playerPage, context, batchLogger, {
+        allowedHosts: config.allowedHosts,
+      });
+
+      try {
+        const hasDirectUrl = rec.playback_url && (rec.playback_url.startsWith('http://') || rec.playback_url.startsWith('https://'));
+
+        if (hasDirectUrl) {
+          batchLogger.info({ url: rec.playback_url }, 'Navegando a la URL directa de la grabación...');
+          await playerPage.goto(rec.playback_url, { waitUntil: 'domcontentloaded', timeout: config.browserTimeoutMs });
+        } else {
+          // Navegar a la página de grabaciones de Collaborate
+          const curUrl = playerPage.url();
+          if (!curUrl.includes('collab') && !curUrl.includes('bbcollab')) {
+            const lmsUrl = config.lmsBaseUrl.endsWith('/') ? config.lmsBaseUrl.slice(0, -1) : config.lmsBaseUrl;
+            const recPath = config.collabRecordingsPath.startsWith('/') ? config.collabRecordingsPath : `/${config.collabRecordingsPath}`;
+            const collabTableUrl = `${lmsUrl}${recPath}`;
+            batchLogger.info({ collabTableUrl }, 'Navegando a la tabla de grabaciones...');
+            await playerPage.goto(collabTableUrl, { waitUntil: 'domcontentloaded', timeout: config.browserTimeoutMs }).catch(() => {});
+          }
+
+          // Localizar la fila en la tabla y hacer clic en reproducir
+          batchLogger.info({ title: rec.title }, 'Buscando elemento en la tabla de Collaborate...');
+          let launched = false;
+          const frames = [playerPage, ...playerPage.frames()];
+          for (const frame of frames) {
+            try {
+              const row = frame.locator(`tr:has-text("${rec.title}"), [role="row"]:has-text("${rec.title}")`).first();
+              if ((await row.count()) > 0) {
+                const playBtn = row.locator('button, [role="button"], .icon-button, [aria-label*="play" i], [title*="reproduc" i], span:has-text("play_circle")').first();
+                if ((await playBtn.count()) > 0) {
+                  const [popup] = await Promise.all([
+                    context.waitForEvent('page', { timeout: 8000 }).catch(() => null),
+                    playBtn.click({ timeout: 5000 }).catch(() => {}),
+                  ]);
+                  if (popup) {
+                    playerPage = popup;
+                    await popup.waitForLoadState('domcontentloaded').catch(() => {});
+                    if (popup.url().startsWith('http')) {
+                      db.upsertRecording({
+                        collabId: rec.collab_id,
+                        title: rec.title,
+                        createdAt: rec.created_at,
+                        durationSeconds: rec.duration_seconds,
+                        playbackUrl: popup.url(),
+                      });
+                    }
+                  }
+                  launched = true;
+                  break;
+                }
+              }
+            } catch (_) {}
+          }
+
+          if (!launched) {
+            throw new Error(`No se pudo encontrar la fila o el botón de reproducción para "${rec.title}"`);
+          }
+        }
+
+        // Detectar reproductor activo y esperar a que el vídeo esté disponible
+        console.log('⏳ Esperando a que el reproductor de vídeo cargue...');
+        const activePage = await captureManager.findActivePlayerPage();
+        let hook = await captureManager.injectCaptureHook(activePage);
+        let waitElapsed = 0;
+
+        while (!hook.found && waitElapsed < 30000) {
+          await new Promise((r) => setTimeout(r, 2000));
+          waitElapsed += 2000;
+          const candidatePage = await captureManager.findActivePlayerPage();
+          hook = await captureManager.injectCaptureHook(candidatePage);
+        }
+
+        if (!hook.found) {
+          throw new Error('No se detectó elemento de audio/vídeo tras 30 segundos de espera.');
+        }
+
+        // Iniciar captura acelerada
+        console.log(`🔴 Grabando audio digital a ${speed}x de velocidad...`);
+        await captureManager.startCapture(hook.frame, speed);
+
+        let consecutiveEndedCount = 0;
+        let autoStopTriggered = false;
+
+        while (!autoStopTriggered) {
+          await new Promise((r) => setTimeout(r, 1000));
+          const progress = await captureManager.getPlaybackProgress(hook.frame).catch(() => null);
+
+          if (progress && progress.hasMedia) {
+            const curStr = formatTime(progress.currentTime);
+            const durStr = progress.duration > 0 ? formatTime(progress.duration) : '--:--';
+            const remainingRealSecs = (progress.duration - progress.currentTime) / (speed > 0 ? speed : 1.0);
+            const remainingStr = progress.duration > progress.currentTime
+              ? formatTime(remainingRealSecs)
+              : '00:00';
+            const statusStr = progress.isPaused ? '⏸️ En pausa' : '▶️ Grabando';
+            const speedTag = speed !== 1.0 ? ` (${speed}x)` : '';
+
+            process.stdout.write(
+              `\r  [${renderBar(progress.percentage)}] ${progress.percentage}% | ${curStr} / ${durStr} | Restante: ~${remainingStr}${speedTag} | ${statusStr}   `
+            );
+
+            if (progress.hasEnded && progress.duration > 0 && progress.currentTime >= progress.duration - 1.5) {
+              consecutiveEndedCount++;
+              if (consecutiveEndedCount >= 2) {
+                autoStopTriggered = true;
+                process.stdout.write('\n\n  🏁 Vídeo finalizado. Esperando búfer final de 3s...\n');
+                await new Promise((r) => setTimeout(r, 3000));
+                break;
+              }
+            } else {
+              consecutiveEndedCount = 0;
+            }
+          }
+        }
+
+        // Detener captura y normalizar con FFmpeg
+        console.log('  ⏳ Deteniendo grabación y normalizando audio (FFmpeg)...');
+        const recId = captureManager.sanitizeRecordingId(rec.collab_id || rec.title);
+        const captureRes = await captureManager.stopCapture(hook.frame, recId, speed);
+
+        console.log(`  ✅ Audio capturado: ${captureRes.wavPath} (${(captureRes.sizeBytes / 1024 / 1024).toFixed(2)} MB)`);
+
+        // Transcribir con faster-whisper
+        console.log(`  🚀 Transcribiendo con faster-whisper (${model})...`);
+        await runTranscriptionCli({
+          inputFile: captureRes.wavPath,
+          model,
+        });
+
+        // Refinar apuntes con Gemini si hay API Key
+        if (config.geminiApiKey) {
+          console.log('  ✨ Refinando apuntes con Gemini AI Studio...');
+          try {
+            const { TranscriptRefiner } = await import('./ai/TranscriptRefiner.js');
+            const refiner = new TranscriptRefiner({
+              apiKey: config.geminiApiKey,
+              logger: batchLogger,
+            });
+            const rawTxtPath = path.resolve('data', 'transcripts', captureRes.recordingId, `${captureRes.recordingId}.txt`);
+            if (fs.existsSync(rawTxtPath)) {
+              const refined = await refiner.refineTranscriptFile(rawTxtPath);
+              console.log(`  📝 Apuntes limpios generados en: ${refined.cleanTxtPath}`);
+            }
+          } catch (aiErr) {
+            batchLogger.warn({ err: aiErr }, 'Aviso: No se pudo completar el refinado de Gemini.');
+          }
+        }
+
+        // Actualizar estado en SQLite
+        db.updateStatus(rec.collab_id, 'processed');
+        successCount++;
+        console.log(`  🎉 ¡Grabación "${rec.title}" completada y guardada como 'processed'!\n`);
+
+      } catch (itemErr) {
+        const errorMsg = itemErr instanceof Error ? itemErr.message : String(itemErr);
+        batchLogger.error({ err: itemErr, recId: rec.collab_id }, `Error procesando grabación: ${rec.title}`);
+        console.error(`\n  ❌ Error en esta grabación: ${errorMsg}\n`);
+        failedItems.push({ title: rec.title, collabId: rec.collab_id, error: errorMsg });
+      } finally {
+        if (playerPage !== mainPage) {
+          await playerPage.close().catch(() => {});
+        }
+      }
+    }
+
+  } finally {
+    console.log('\n===============================================================');
+    console.log('📊 RESUMEN FINAL DEL PROCESAMIENTO EN LOTE');
+    console.log('===============================================================');
+    console.log(`• Total analizadas:  ${queue.length}`);
+    console.log(`• Exitosas:          ${successCount}`);
+    console.log(`• Con errores:       ${failedItems.length}`);
+    if (failedItems.length > 0) {
+      console.log('• Grabaciones con error:');
+      failedItems.forEach((f) => console.log(`  - [${f.collabId}] ${f.title}: ${f.error}`));
+    }
+    console.log('===============================================================\n');
+
+    await browserManager.close().catch(() => {});
+    db.close();
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger(config);
@@ -777,6 +1177,11 @@ async function main(): Promise<void> {
   logger.info({ command }, 'LectureVault starting');
 
   switch (command) {
+    case 'batch-transcribe': {
+      await runBatchTranscribe(config, logger);
+      break;
+    }
+
     case 'capture-audio': {
       await runCaptureAndTranscribe(config, logger, false);
       break;
@@ -828,7 +1233,7 @@ async function main(): Promise<void> {
     }
 
     default:
-      logger.error({ command }, 'Unknown command. Use: capture-and-transcribe, capture-audio, inspect-player, accept-manual, sync, serve, or sync-and-serve');
+      logger.error({ command }, 'Unknown command. Use: batch-transcribe, capture-and-transcribe, capture-audio, inspect-player, accept-manual, sync, serve, or sync-and-serve');
       process.exit(1);
   }
 }

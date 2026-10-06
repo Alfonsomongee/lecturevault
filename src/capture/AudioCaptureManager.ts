@@ -26,6 +26,34 @@ export interface PlaybackProgress {
   isPaused: boolean;
   hasEnded: boolean;
   percentage: number;
+  playbackRate?: number;
+}
+
+/**
+ * Builds FFmpeg audio filter chain using atempo to restore audio to 1x speed.
+ */
+export function buildAtempoFilter(speed: number): string | null {
+  if (speed <= 0 || Math.abs(speed - 1.0) < 0.01) return null;
+  const factor = 1 / speed;
+  const filters: string[] = [];
+  let remaining = factor;
+
+  while (remaining < 0.4999) {
+    filters.push('atempo=0.5');
+    remaining /= 0.5;
+  }
+  while (remaining > 2.0001) {
+    filters.push('atempo=2.0');
+    remaining /= 2.0;
+  }
+  if (Math.abs(remaining - 1.0) > 0.005) {
+    let formatted: string;
+    if (Math.abs(remaining - 0.5) < 0.001) formatted = '0.5';
+    else if (Math.abs(remaining - 2.0) < 0.001) formatted = '2.0';
+    else formatted = remaining.toFixed(4);
+    filters.push(`atempo=${formatted}`);
+  }
+  return filters.join(',');
 }
 
 export interface CaptureResult {
@@ -131,7 +159,7 @@ export class AudioCaptureManager {
               mediaEl: null,
               hasEnded: false,
 
-              async start() {
+              async start(speed = 1.0) {
                 const el = document.querySelector('video') || document.querySelector('audio');
                 if (!el) throw new Error('No video or audio element found to record');
                 this.mediaEl = el;
@@ -139,6 +167,13 @@ export class AudioCaptureManager {
                 // Ensure media is not muted
                 if (el.muted) el.muted = false;
                 if (el.volume === 0) el.volume = 1.0;
+
+                // Set playback rate acceleration if requested
+                if (typeof speed === 'number' && speed > 0) {
+                  try {
+                    el.playbackRate = speed;
+                  } catch (_) {}
+                }
 
                 // Listen for ended event on the media element
                 this.hasEnded = false;
@@ -229,6 +264,7 @@ export class AudioCaptureManager {
                   isPaused: el.paused,
                   hasEnded: ended,
                   percentage: dur > 0 ? Math.min(100, Math.round((cur / dur) * 100)) : 0,
+                  playbackRate: el.playbackRate || 1.0,
                 };
               },
 
@@ -319,27 +355,28 @@ export class AudioCaptureManager {
   }
 
   /**
-   * Starts recording audio from the player in the active page.
+   * Starts recording audio from the player in the active page with optional playback speed acceleration.
    */
-  public async startCapture(targetContext: Page | Frame): Promise<void> {
-    this.logger.info('Starting audio capture on media element...');
-    await targetContext.evaluate(async () => {
+  public async startCapture(targetContext: Page | Frame, speed: number = 1.0): Promise<void> {
+    this.logger.info({ speed }, 'Starting audio capture on media element...');
+    await targetContext.evaluate(async (sp) => {
       const rec = (window as any).__LV_RECORDER__;
       if (!rec) throw new Error('Audio recorder hook not injected in page');
-      await rec.start();
-    });
-    this.logger.info('In-browser audio capture started successfully');
+      await rec.start(sp);
+    }, speed);
+    this.logger.info({ speed }, 'In-browser audio capture started successfully');
   }
 
   /**
-   * Stops recording audio and saves the captured data.
+   * Stops recording audio and saves the captured data, restoring speed via FFmpeg if accelerated.
    */
   public async stopCapture(
     targetContext: Page | Frame,
-    recordingIdRaw: string
+    recordingIdRaw: string,
+    speed: number = 1.0
   ): Promise<CaptureResult> {
     const recordingId = this.sanitizeRecordingId(recordingIdRaw);
-    this.logger.info({ recordingId }, 'Stopping audio capture...');
+    this.logger.info({ recordingId, speed }, 'Stopping audio capture...');
 
     // Query video duration before stopping
     const progress = await this.getPlaybackProgress(targetContext).catch(() => null);
@@ -362,9 +399,9 @@ export class AudioCaptureManager {
     fs.writeFileSync(rawWebmPath, audioBuffer);
     this.logger.info({ rawWebmPath, bytes: audioBuffer.length }, 'Raw WebM audio saved');
 
-    // Convert to normalized 16 kHz Mono WAV using FFmpeg
-    this.logger.info({ targetWavPath }, 'Normalizing to 16 kHz mono WAV via FFmpeg...');
-    await this.convertWebmTo16kHzMonoWav(rawWebmPath, targetWavPath);
+    // Convert to normalized 16 kHz Mono WAV using FFmpeg, restoring speed if accelerated
+    this.logger.info({ targetWavPath, speed }, 'Normalizing to 16 kHz mono WAV via FFmpeg (restoring speed)...');
+    await this.convertWebmTo16kHzMonoWav(rawWebmPath, targetWavPath, speed);
 
     const stats = fs.statSync(targetWavPath);
     // 16 kHz 16-bit mono = 32000 bytes per second, 44-byte WAV header
@@ -397,13 +434,19 @@ export class AudioCaptureManager {
   }
 
   /**
-   * Converts a WebM file to 16 kHz Mono PCM WAV using system FFmpeg.
+   * Converts a WebM file to 16 kHz Mono PCM WAV using system FFmpeg, applying atempo filter if accelerated.
    */
-  public async convertWebmTo16kHzMonoWav(inputPath: string, outputPath: string): Promise<void> {
+  public async convertWebmTo16kHzMonoWav(
+    inputPath: string,
+    outputPath: string,
+    speed: number = 1.0
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
+      const atempo = buildAtempoFilter(speed);
       const args = [
         '-y',
         '-i', inputPath,
+        ...(atempo ? ['-filter:a', atempo] : []),
         '-vn',
         '-ac', '1',
         '-ar', '16000',
