@@ -539,6 +539,7 @@ async function runCaptureAndTranscribe(
   let speed = 1.0;
   let silent = false;
   let headless = false;
+  let useEdge = process.env.BROWSER_CHANNEL === 'msedge';
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--duration' || args[i] === '-d') && args[i + 1]) {
@@ -557,13 +558,15 @@ async function runCaptureAndTranscribe(
       silent = true;
     } else if (args[i] === '--headless') {
       headless = true;
+    } else if (args[i] === '--edge' || args[i] === '-e') {
+      useEdge = true;
     }
   }
 
   capLogger.info('=====================================================');
   capLogger.info('🎙️ LECTUREVAULT — CAPTURA Y TRANSCRIPCIÓN AUTOMÁTICA');
   capLogger.info('=====================================================');
-  capLogger.info({ allowedHosts: config.allowedHosts, durationSec, model, speed, silent, headless }, 'Parámetros de captura');
+  capLogger.info({ allowedHosts: config.allowedHosts, durationSec, model, speed, silent, headless, browser: useEdge ? 'Microsoft Edge' : 'Chromium' }, 'Parámetros de captura');
 
   const browserManager = new BrowserManager(
     {
@@ -573,6 +576,7 @@ async function runCaptureAndTranscribe(
       viewportHeight: config.browserViewportHeight,
       timeoutMs: config.browserTimeoutMs,
       screenshotDir: config.screenshotDir,
+      channel: useEdge ? 'msedge' : undefined,
       args: [
         '--autoplay-policy=no-user-gesture-required',
         ...(silent ? ['--mute-audio'] : []),
@@ -668,6 +672,21 @@ async function runCaptureAndTranscribe(
     let manualStopRequested = false;
     let autoStopTriggered = false;
 
+    // Reactivate process.stdin if paused by previous readline confirmation
+    if (process.stdin.isPaused()) {
+      process.stdin.resume();
+    }
+
+    const onKeypressOrData = (chunk: Buffer | string) => {
+      const s = chunk.toString();
+      // Any newline, Enter (\r, \n), space, or 'q'
+      if (s.includes('\r') || s.includes('\n') || s.toLowerCase().includes('q') || s.includes(' ')) {
+        manualStopRequested = true;
+      }
+    };
+
+    process.stdin.on('data', onKeypressOrData);
+
     // Non-blocking readline listener for manual ENTER
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.once('line', () => {
@@ -722,6 +741,7 @@ async function runCaptureAndTranscribe(
     }
 
     rl.close();
+    process.stdin.removeListener('data', onKeypressOrData);
 
     if (manualStopRequested) {
       const p = await captureManager.getPlaybackProgress(hook.frame).catch(() => null);
@@ -810,6 +830,7 @@ async function runBatchTranscribe(
   let speed = 1.0;
   let silent = false;
   let headless = false;
+  let useEdge = process.env.BROWSER_CHANNEL === 'msedge';
   let statusFilter: RecordingStatus | 'all' = 'new';
   let limit = 0;
   let fromIdx = 0;
@@ -829,6 +850,8 @@ async function runBatchTranscribe(
       silent = true;
     } else if (args[i] === '--headless') {
       headless = true;
+    } else if (args[i] === '--edge' || args[i] === '-e') {
+      useEdge = true;
     } else if (args[i] === '--status' && args[i + 1]) {
       statusFilter = args[i + 1]! as any;
       i++;
@@ -954,6 +977,7 @@ Ejemplos:
       viewportHeight: config.browserViewportHeight,
       timeoutMs: config.browserTimeoutMs,
       screenshotDir: config.screenshotDir,
+      channel: useEdge ? 'msedge' : undefined,
       args: [
         '--autoplay-policy=no-user-gesture-required',
         ...(silent ? ['--mute-audio'] : []),

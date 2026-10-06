@@ -78,6 +78,7 @@ export function loadConfig(): AppConfig {
     enableDiagnostics: envBool('ENABLE_DIAGNOSTICS', false),
     screenshotDiagnostics: envBool('SCREENSHOT_DIAGNOSTICS', false),
     geminiApiKey: process.env['GEMINI_API_KEY']?.trim() || undefined,
+    browserChannel: process.env['BROWSER_CHANNEL']?.trim() || undefined,
   };
 
   // Validate port range

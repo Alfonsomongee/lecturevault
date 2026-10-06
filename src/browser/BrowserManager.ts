@@ -11,6 +11,7 @@ export interface BrowserManagerConfig {
   viewportHeight: number;
   timeoutMs: number;
   screenshotDir: string;
+  channel?: string;
   args?: string[];
 }
 
@@ -47,9 +48,11 @@ export class BrowserManager {
     this.logger.info({ screenshotDir: this.config.screenshotDir }, 'Creating screenshot directory if needed');
     fs.mkdirSync(this.config.screenshotDir, { recursive: true });
 
-    this.logger.info('Launching Chromium persistent context');
+    const channel = this.config.channel || process.env.BROWSER_CHANNEL;
+    this.logger.info({ channel: channel || 'default-chromium' }, 'Launching persistent browser context');
     this.context = await chromium.launchPersistentContext(this.config.profileDir, {
       headless: !this.config.headed,
+      channel: channel || undefined,
       viewport: {
         width: this.config.viewportWidth,
         height: this.config.viewportHeight,

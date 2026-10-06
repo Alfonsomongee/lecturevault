@@ -52,6 +52,7 @@ export interface AppConfig {
   enableDiagnostics: boolean;
   screenshotDiagnostics: boolean;
   geminiApiKey?: string;
+  browserChannel?: string;
 }
 
 /** Page state detected by the navigator */
