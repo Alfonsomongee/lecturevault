@@ -77,6 +77,7 @@ export function loadConfig(): AppConfig {
     diagnosticsDir: path.resolve(envStr('DIAGNOSTICS_DIR', './data/diagnostics')),
     enableDiagnostics: envBool('ENABLE_DIAGNOSTICS', false),
     screenshotDiagnostics: envBool('SCREENSHOT_DIAGNOSTICS', false),
+    geminiApiKey: process.env['GEMINI_API_KEY']?.trim() || undefined,
   };
 
   // Validate port range

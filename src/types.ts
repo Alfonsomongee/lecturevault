@@ -51,6 +51,7 @@ export interface AppConfig {
   diagnosticsDir: string;
   enableDiagnostics: boolean;
   screenshotDiagnostics: boolean;
+  geminiApiKey?: string;
 }
 
 /** Page state detected by the navigator */

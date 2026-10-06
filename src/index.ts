@@ -9,6 +9,8 @@
  */
 
 import readline from 'node:readline';
+import path from 'node:path';
+import fs from 'node:fs';
 import { loadConfig } from './utils/config.js';
 import { createLogger } from './utils/logger.js';
 import { BrowserManager } from './browser/BrowserManager.js';
@@ -733,6 +735,28 @@ async function runCaptureAndTranscribe(
         inputFile: result.wavPath,
         model,
       });
+
+      // Si hay clave de Gemini configurada, refinar y generar apuntes limpios
+      if (config.geminiApiKey) {
+        console.log('\n✨ [GEMINI AI STUDIO] Filtrando ruido oral y estructurando apuntes limpios...');
+        try {
+          const { TranscriptRefiner } = await import('./ai/TranscriptRefiner.js');
+          const refiner = new TranscriptRefiner({
+            apiKey: config.geminiApiKey,
+            logger: capLogger,
+          });
+          const rawTxtPath = path.resolve('data', 'transcripts', result.recordingId, `${result.recordingId}.txt`);
+          if (fs.existsSync(rawTxtPath)) {
+            const refined = await refiner.refineTranscriptFile(rawTxtPath);
+            console.log(`✅ Apuntes limpios generados con éxito:`);
+            console.log(`   - Texto plano: ${refined.cleanTxtPath}`);
+            console.log(`   - Markdown:    ${refined.cleanMdPath}\n`);
+          }
+        } catch (aiErr) {
+          capLogger.warn({ err: aiErr }, 'No se pudo completar el refinado con Gemini');
+          console.warn('⚠️ Aviso: No se pudo refinar con Gemini:', aiErr instanceof Error ? aiErr.message : aiErr);
+        }
+      }
     }
 
   } catch (err) {
