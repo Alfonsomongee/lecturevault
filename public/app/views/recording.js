@@ -5,6 +5,10 @@ import {
 } from '../util.js';
 import { state, refreshMeta, renderRoute, onLeave } from '../main.js';
 
+const localDate = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 const fold = (t) => t.normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase();
 
 export async function renderRecording(root, id, params) {
@@ -24,11 +28,13 @@ export async function renderRecording(root, id, params) {
       <div class="crumbs"><a href="#/">Biblioteca</a> › <span>${rec.course || 'Sin asignatura'}</span></div>
       <h1>${rec.title}</h1>
       <div class="rec-meta">
-        <span>📅 ${fmtDate(rec.created_at, true)}</span><span>⏱ ${duration(totalSec)}</span>
+        <span>📅 ${fmtDate(rec.created_at)}</span><span>⏱ ${duration(totalSec)}</span>
         <span class="badge ${hasAudio ? 'ok' : 'off'}">🎧 ${hasAudio ? 'Audio local' : 'Sin audio'}</span>
         <form id="course-form" class="chip-row" style="gap:6px">
           <label class="sr-only" for="course-input">Asignatura</label>
           <input class="input" id="course-input" list="course-dl" value="${rec.course}" placeholder="Asignar asignatura…" maxlength="80" style="width:210px;padding:5px 10px">
+          <label class="sr-only" for="date-input">Fecha de la clase</label>
+          <input class="input" id="date-input" type="date" value="${localDate(rec.created_at)}" title="Fecha real de la clase: ancla las fechas relativas («hasta el día 20»)" style="padding:5px 10px">
           <datalist id="course-dl">${courseOptions}</datalist>
           <button class="btn sm" type="submit">Guardar</button>
         </form>
@@ -371,8 +377,12 @@ export async function renderRecording(root, id, params) {
   root.querySelector('#course-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await api(`/api/recordings/${rec.id}`, { method: 'PATCH', body: { course: root.querySelector('#course-input').value } });
-      toast('Asignatura guardada');
+      const date = root.querySelector('#date-input').value;
+      await api(`/api/recordings/${rec.id}`, {
+        method: 'PATCH',
+        body: { course: root.querySelector('#course-input').value, ...(date && date !== localDate(rec.created_at) ? { date } : {}) },
+      });
+      toast('Guardado');
       await refreshMeta();
     } catch (err) { toast(err.message, 'err'); }
   });

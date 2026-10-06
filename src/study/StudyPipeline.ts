@@ -16,7 +16,7 @@ import { GeminiClient } from '../ai/GeminiClient.js';
 import { NOTES_PROMPT_VERSION, TranscriptRefiner } from '../ai/TranscriptRefiner.js';
 import { StudyGenerator } from './StudyGenerator.js';
 import { Rag } from '../search/Rag.js';
-import { chunkNotes, chunkSegments } from '../library/chunker.js';
+import { chunkNotes } from '../library/chunker.js';
 import { isSafeTranscriptId } from '../utils/ids.js';
 
 export type PipelineStep = 'notes' | 'study' | 'embeddings';
@@ -143,7 +143,7 @@ export class StudyPipeline {
           });
           report.alerts = this.study.replaceAlerts(recordingId, out.alerts);
           report.flashcards = this.study.upsertFlashcards(recordingId, out.flashcards);
-          report.glossary = this.study.upsertGlossary(recordingId, recording.course, out.glossary);
+          report.glossary = this.study.upsertGlossary(recordingId, out.glossary);
         } catch (err) {
           report.errors.push(`Estudio: ${(err as Error).message}`);
         }
@@ -153,10 +153,7 @@ export class StudyPipeline {
     // 3. Retrieval index: rebuild chunks when notes changed, then embed what is missing
     if (notesChanged) {
       const notes = this.study.getNotes(recordingId);
-      this.study.replaceChunks(recordingId, [
-        ...chunkSegments(segments),
-        ...(notes ? chunkNotes(notes.markdown) : []),
-      ]);
+      this.study.replaceChunks(recordingId, 'notes', notes ? chunkNotes(notes.markdown) : []);
     }
     if (steps.has('embeddings')) {
       try {

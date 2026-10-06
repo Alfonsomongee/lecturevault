@@ -11,7 +11,7 @@
 import type Database from 'better-sqlite3';
 import type { Logger } from 'pino';
 import { GeminiClient, dot } from '../ai/GeminiClient.js';
-import { StudyRepository, type ChunkRow } from '../database/StudyRepository.js';
+import { StudyRepository } from '../database/StudyRepository.js';
 import { fold, tokenize } from './SearchIndex.js';
 import { msToClock } from '../utils/time.js';
 
@@ -121,23 +121,36 @@ export class Rag {
     this.logger = logger?.child({ component: 'rag' });
   }
 
-  /** Embed every chunk that has no vector yet. Returns how many were embedded. */
-  async indexEmbeddings(): Promise<number> {
-    if (!this.client.hasKey) return 0;
-    const missing = this.study.getChunksMissingEmbedding();
-    if (missing.length === 0) return 0;
+  private get modelTag(): string {
+    return `${this.client.embeddingModel}:${EMBEDDING_DIMENSIONS}`;
+  }
 
-    const vectors = await this.client.embed(
-      missing.map((c) => c.text.slice(0, 6000)),
-      'RETRIEVAL_DOCUMENT',
-      EMBEDDING_DIMENSIONS
-    );
-    this.study.setEmbeddings(
-      missing.map((c, i) => ({ id: c.id, vector: vectors[i]! })),
-      `${this.client.embeddingModel}:${EMBEDDING_DIMENSIONS}`
-    );
-    this.logger?.info({ chunks: missing.length }, 'Embeddings generados');
-    return missing.length;
+  /** One indexing run at a time, even if /ask and /process arrive together. */
+  private static running: Promise<number> | null = null;
+
+  /**
+   * Embed every chunk with no vector (or one from another embedding model). Each batch is saved as
+   * soon as it succeeds, so a rate-limit halfway through never throws away finished work.
+   */
+  indexEmbeddings(): Promise<number> {
+    if (!this.client.hasKey) return Promise.resolve(0);
+    if (Rag.running) return Rag.running;
+    Rag.running = this.runIndex().finally(() => { Rag.running = null; });
+    return Rag.running;
+  }
+
+  private async runIndex(): Promise<number> {
+    const missing = this.study.getChunksMissingEmbedding(this.modelTag);
+    const BATCH = 50;
+    let done = 0;
+    for (let i = 0; i < missing.length; i += BATCH) {
+      const slice = missing.slice(i, i + BATCH);
+      const vectors = await this.client.embed(slice.map((c) => c.text.slice(0, 6000)), 'RETRIEVAL_DOCUMENT', EMBEDDING_DIMENSIONS);
+      this.study.setEmbeddings(slice.map((c, k) => ({ id: c.id, vector: vectors[k]! })), this.modelTag);
+      done += slice.length;
+    }
+    if (done) this.logger?.info({ chunks: done }, 'Embeddings generados');
+    return done;
   }
 
   private lexical(tokens: string[], course: string | undefined, limit: number): number[] {
@@ -146,26 +159,22 @@ export class Rag {
     const rows = this.db
       .prepare(
         `SELECT c.id FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
-         ${course ? 'JOIN recordings r ON r.id = c.recording_id AND r.course = ?' : ''}
+         ${course !== undefined ? 'JOIN recordings r ON r.id = c.recording_id AND r.course = ?' : ''}
          WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?`
       )
-      .all(...(course ? [course, match, limit] : [match, limit])) as { id: number }[];
+      .all(...(course !== undefined ? [course, match, limit] : [match, limit])) as { id: number }[];
     return rows.map((r) => r.id);
   }
 
-  private async semantic(
-    question: string,
-    chunks: (ChunkRow & { recording_title: string; course: string })[],
-    limit: number
-  ): Promise<number[]> {
-    const withVectors = chunks.filter((c) => c.embedding && c.embedding.byteLength > 0);
-    if (!this.client.hasKey || withVectors.length === 0) return [];
+  private async semantic(question: string, course: string | undefined, limit: number): Promise<number[]> {
+    if (!this.client.hasKey) return [];
+    const vectors = this.study.getVectors(this.modelTag, course); // ids + vectors only, no text
+    if (vectors.length === 0) return [];
 
     const [query] = await this.client.embed([question], 'RETRIEVAL_QUERY', EMBEDDING_DIMENSIONS);
-    const scored = withVectors.map((c) => {
-      const buf = c.embedding!;
-      const vec = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-      return { id: c.id, score: dot(query!, vec) };
+    const scored = vectors.map((v) => {
+      const vec = new Float32Array(v.embedding.buffer.slice(v.embedding.byteOffset, v.embedding.byteOffset + v.embedding.byteLength));
+      return { id: v.id, score: dot(query!, vec) };
     });
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit).map((s) => s.id);
@@ -176,14 +185,11 @@ export class Rag {
     options: { course?: string; k?: number } = {}
   ): Promise<{ chunks: RetrievedChunk[]; mode: 'hybrid' | 'lexical' }> {
     const k = options.k ?? 8;
-    const all = this.study.getChunks({ course: options.course });
-    if (all.length === 0) return { chunks: [], mode: 'lexical' };
-    const byId = new Map(all.map((c) => [c.id, c]));
 
     const lexicalIds = this.lexical(queryTokens(question), options.course, 25);
     let semanticIds: number[] = [];
     try {
-      semanticIds = await this.semantic(question, all, 25);
+      semanticIds = await this.semantic(question, options.course, 25);
     } catch (err) {
       this.logger?.warn({ err }, 'Búsqueda semántica no disponible; se usa solo BM25');
     }
@@ -193,22 +199,23 @@ export class Rag {
       ids.forEach((id, rank) => fused.set(id, (fused.get(id) ?? 0) + 1 / (RRF_K + rank + 1)));
     }
 
-    const chunks = [...fused.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, k)
-      .map(([id, score]) => {
-        const c = byId.get(id)!;
-        return {
-          chunkId: id,
-          recordingId: c.recording_id,
-          recordingTitle: c.recording_title,
-          course: c.course,
-          source: c.source,
-          startMs: c.start_ms,
-          text: c.text,
-          score,
-        } satisfies RetrievedChunk;
-      });
+    const ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
+    const byId = new Map(this.study.getChunksByIds(ranked.map(([id]) => id)).map((c) => [c.id, c]));
+    const chunks = ranked.flatMap(([id, score]) => {
+      const c = byId.get(id);
+      return c
+        ? [{
+            chunkId: id,
+            recordingId: c.recording_id,
+            recordingTitle: c.recording_title,
+            course: c.course,
+            source: c.source,
+            startMs: c.start_ms,
+            text: c.text,
+            score,
+          } satisfies RetrievedChunk]
+        : [];
+    });
 
     return { chunks, mode: semanticIds.length > 0 ? 'hybrid' : 'lexical' };
   }

@@ -131,6 +131,59 @@ describe('study library', () => {
       expect(ingestor.study.countChunksMissingEmbedding()).toBe(ingestor.study.getChunks().length - 1);
     });
 
+    it('detects a re-transcription even when segment count and end time are identical', () => {
+      writeTranscript('same', [[0, 5, 'texto con el modelo pequeño'], [5, 10, 'segunda frase']]);
+      const ingestor = new TranscriptIngestor(db, tmp, logger);
+      ingestor.ingestAll();
+      writeTranscript('same', [[0, 5, 'texto con el modelo grande y mejor'], [5, 10, 'segunda frase']]);
+      expect(ingestor.ingestAll().updatedSegments).toBe(1);
+      const rec = db.getRecordingByTranscriptId('same')!;
+      expect(ingestor.study.getSegments(rec.id)[0]!.text).toContain('grande');
+    });
+
+    it('new notes replace only note chunks: transcript embeddings survive', () => {
+      writeTranscript('keep', [[0, 5, 'contenido de la clase sobre mallado']], '# Notas\n\nPrimera versión');
+      const ingestor = new TranscriptIngestor(db, tmp, logger);
+      ingestor.ingestAll();
+      const rec = db.getRecordingByTranscriptId('keep')!;
+      const transcriptChunk = ingestor.study.getChunks({ recordingId: rec.id }).find((c) => c.source === 'transcript')!;
+      ingestor.study.setEmbeddings([{ id: transcriptChunk.id, vector: new Float32Array([1, 0]) }], 'm');
+
+      fs.writeFileSync(path.join(tmp, 'transcripts', 'keep', 'keep.clean.md'), '# Notas\n\nSegunda versión');
+      ingestor.ingestAll();
+      const after = ingestor.study.getChunks({ recordingId: rec.id });
+      expect(after.find((c) => c.id === transcriptChunk.id)?.embedding).not.toBeNull();
+      expect(after.some((c) => c.source === 'notes' && c.text.includes('Segunda'))).toBe(true);
+    });
+
+    it('does not guess when two recordings share a title (ambiguous folder becomes its own local recording)', () => {
+      db.upsertRecording({ collabId: 'a1', title: 'Clase 1', createdAt: '2026-03-01', durationSeconds: 60, playbackUrl: '', course: 'A' });
+      db.upsertRecording({ collabId: 'b1', title: 'Clase 1', createdAt: '2026-03-02', durationSeconds: 60, playbackUrl: '', course: 'B' });
+      writeTranscript('Clase_1', [[0, 5, 'hola']]);
+      const result = new TranscriptIngestor(db, tmp, logger).ingestAll();
+      expect(result.linked).toBe(0);
+      expect(result.created).toBe(1);
+      expect(db.getAllRecordings().filter((r) => r.transcript_id === null)).toHaveLength(2);
+    });
+
+    it('linkTranscript folds a placeholder local recording into the real Collab2 one', () => {
+      writeTranscript('lt', [[0, 5, 'hola mundo']]);
+      const ingestor = new TranscriptIngestor(db, tmp, logger);
+      ingestor.ingestAll();
+      const local = db.getRecordingByTranscriptId('lt')!;
+      db.upsertRecording({ collabId: 'real-1', title: 'Real', createdAt: '2026-03-01', durationSeconds: 60, playbackUrl: '' });
+      const real = db.getRecordingByCollabId('real-1')!;
+
+      db.linkTranscript(real.id, 'lt');
+      expect(db.getRecordingById(local.id)).toBeUndefined();
+      expect(db.getRecordingByTranscriptId('lt')!.id).toBe(real.id);
+      ingestor.ingestAll();
+      expect(ingestor.study.getSegments(real.id)).toHaveLength(1);
+      // a different Collab2 recording must never be stolen
+      db.upsertRecording({ collabId: 'real-2', title: 'Otra', createdAt: '2026-03-01', durationSeconds: 60, playbackUrl: '' });
+      expect(() => db.linkTranscript(db.getRecordingByCollabId('real-2')!.id, 'lt')).toThrow(/ya pertenece/);
+    });
+
     it('rejects unsafe folder names and reports bad JSON without aborting the batch', () => {
       writeTranscript('good', segs);
       fs.mkdirSync(path.join(tmp, 'transcripts', 'bad'), { recursive: true });
@@ -266,6 +319,48 @@ describe('study library', () => {
       expect(inserted).toBe(1); // the confirmed deadline@1000 is not duplicated
       expect(all.map((a) => a.kind).sort()).toEqual(['deadline', 'warning']);
       expect(all.find((a) => a.kind === 'deadline')!.confirmed).toBe(1);
+    });
+
+    it('treats a regenerated alert a few seconds off as the same decision', () => {
+      study.replaceAlerts(recId, [{ kind: 'deadline', text: 'Entrega', t_ms: 754_000, due_date: '2026-03-20' }]);
+      study.updateAlert(study.listAlerts({ recordingId: recId })[0]!.id, { confirmed: true });
+      study.replaceAlerts(recId, [{ kind: 'deadline', text: 'Entrega (otra redacción)', t_ms: 752_000, due_date: '2026-03-20' }]);
+      expect(study.listAlerts({ recordingId: recId })).toHaveLength(1);
+    });
+
+    it('keeps two distinct alerts of the same kind a few seconds apart in one batch', () => {
+      study.replaceAlerts(recId, [
+        { kind: 'deadline', text: 'Entrega de la práctica', t_ms: 138_000 },
+        { kind: 'deadline', text: 'Cierra el foro', t_ms: 149_500 },
+      ]);
+      expect(study.listAlerts({ recordingId: recId })).toHaveLength(2);
+    });
+
+    it('course filters distinguish "no course" from "all courses"', () => {
+      db.upsertRecording({ collabId: 'c', title: 'C', createdAt: '2026-03-02', durationSeconds: 60, playbackUrl: '', course: 'Física' });
+      const other = db.getRecordingByCollabId('c')!.id;
+      study.upsertFlashcards(recId, [{ kind: 'basic', front: 'sin asignatura', back: 'x' }]);
+      study.upsertFlashcards(other, [{ kind: 'basic', front: 'con asignatura', back: 'y' }]);
+      expect(study.listFlashcards({ course: '' }).map((c) => c.front)).toEqual(['sin asignatura']);
+      expect(study.listFlashcards({ course: 'Física' }).map((c) => c.front)).toEqual(['con asignatura']);
+      expect(study.listFlashcards()).toHaveLength(2);
+    });
+
+    it('glossary terms are per recording and merge by course without losing anyone\'s terms', () => {
+      db.upsertRecording({ collabId: 'g2', title: 'G2', createdAt: '2026-03-03', durationSeconds: 60, playbackUrl: '' });
+      const second = db.getRecordingByCollabId('g2')!.id;
+      study.upsertGlossary(recId, [{ term: 'Von Mises', definition: 'corta' }]);
+      study.upsertGlossary(second, [{ term: 'Von Mises', definition: 'una definición más larga y útil' }, { term: 'Mallado', definition: 'x' }]);
+
+      expect(study.listGlossaryForRecording(recId).map((g) => g.term)).toEqual(['Von Mises']);
+      expect(study.listGlossaryForRecording(second)).toHaveLength(2);
+      const course = study.listGlossary('');
+      expect(course.map((g) => g.term.toLowerCase()).sort()).toEqual(['mallado', 'von mises']);
+
+      // changing the course of a recording keeps its own terms visible
+      db.setCourse(recId, 'Nueva');
+      expect(study.listGlossaryForRecording(recId)).toHaveLength(1);
+      expect(study.listGlossary('Nueva').map((g) => g.term)).toEqual(['Von Mises']);
     });
 
     it('does not duplicate flashcards and preserves review progress', () => {

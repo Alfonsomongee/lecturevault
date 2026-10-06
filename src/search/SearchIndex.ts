@@ -133,7 +133,7 @@ export class SearchIndex {
 
     const filters: string[] = [];
     const params: unknown[] = [];
-    if (options.course) {
+    if (options.course !== undefined) {
       filters.push('r.course = ?');
       params.push(options.course);
     }

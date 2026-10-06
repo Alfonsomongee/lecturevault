@@ -568,6 +568,7 @@ async function runCaptureAndTranscribe(
   let model = 'small';
   let customName = '';
   let course = '';
+  let classDate = '';
   let speed = 1.0;
   let silent = false;
   let headless = false;
@@ -576,6 +577,9 @@ async function runCaptureAndTranscribe(
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--course' || args[i] === '-c') && args[i + 1]) {
       course = args[i + 1]!;
+      i++;
+    } else if (args[i] === '--date' && args[i + 1]) {
+      classDate = args[i + 1]!;
       i++;
     } else if ((args[i] === '--duration' || args[i] === '-d') && args[i + 1]) {
       durationSec = parseInt(args[i + 1]!, 10) || 0;
@@ -811,7 +815,7 @@ async function runCaptureAndTranscribe(
       const studyDb = new DatabaseManager(config.databasePath, capLogger);
       try {
         console.log('\n✨ Indexando la transcripción y preparando tu material de estudio...');
-        const report = await finalizeTranscript(studyDb, config, capLogger, result.recordingId, course || undefined);
+        const report = await finalizeTranscript(studyDb, config, capLogger, result.recordingId, course || undefined, classDate || undefined);
         if (report) printReport(result.recordingId, report);
         else console.log('ℹ️  Sin GEMINI_API_KEY: transcripción indexada para búsqueda. Añade la clave para generar apuntes con IA.');
         console.log('   Abre el dashboard con "npm run serve" para verlo.\n');
@@ -1170,7 +1174,7 @@ Ejemplos:
         // Indexar y, si hay API Key, generar apuntes + avisos + tarjetas
         try {
           console.log('  ✨ Preparando material de estudio...');
-          db.setTranscriptId(db.getRecordingByCollabId(rec.collab_id)!.id, captureRes.recordingId);
+          db.linkTranscript(rec.id, captureRes.recordingId);
           const report = await finalizeTranscript(db, config, batchLogger, captureRes.recordingId);
           if (report) printReport(rec.title, report);
         } catch (aiErr) {

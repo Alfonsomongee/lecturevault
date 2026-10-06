@@ -407,7 +407,7 @@ export function seedDemo(dataDir: string, logger: Logger): SeedResult {
       if (cls.alerts) study.replaceAlerts(rec.id, cls.alerts(t, created));
       if (cls.cards) study.upsertFlashcards(rec.id, cls.cards(t));
       if (cls.glossary) {
-        study.upsertGlossary(rec.id, cls.course, cls.glossary.map((g) => ({ term: g.term, definition: g.definition, t_ms: t(g.line) })));
+        study.upsertGlossary(rec.id, cls.glossary.map((g) => ({ term: g.term, definition: g.definition, t_ms: t(g.line) })));
       }
     }
 

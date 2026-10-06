@@ -48,6 +48,8 @@ export const MIGRATIONS: Migration[] = [
         ALTER TABLE recordings ADD COLUMN course TEXT NOT NULL DEFAULT '';
         -- Folder name under data/transcripts (and audio file stem) for this recording
         ALTER TABLE recordings ADD COLUMN transcript_id TEXT;
+        -- Fingerprint of the stored segments, so re-transcriptions are detected even when counts match
+        ALTER TABLE recordings ADD COLUMN segments_hash TEXT;
         CREATE INDEX IF NOT EXISTS idx_recordings_course ON recordings(course);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_recordings_transcript ON recordings(transcript_id)
           WHERE transcript_id IS NOT NULL;
@@ -133,11 +135,10 @@ export const MIGRATIONS: Migration[] = [
         CREATE TABLE glossary (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
-          course TEXT NOT NULL DEFAULT '',
           term TEXT NOT NULL,
           definition TEXT NOT NULL DEFAULT '',
           t_ms INTEGER NOT NULL DEFAULT 0,
-          UNIQUE(course, term)
+          UNIQUE(recording_id, term)
         );
 
         CREATE TABLE chunks (

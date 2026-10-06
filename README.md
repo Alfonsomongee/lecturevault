@@ -4,8 +4,15 @@ A local-first academic recording assistant that extracts metadata from
 Blackboard Collaborate Ultra (Collab2) recordings and displays them in
 a clean local dashboard.
 
-> **Milestone 1**: Metadata extraction and dashboard only. No media
-> download, stream inspection, or transcription.
+Beyond metadata, LectureVault now captures the audio of a class, transcribes it
+**locally** (faster-whisper) and turns it into a personal study campus: interactive
+notes with timestamps, instant search, exam/deadline alerts with a calendar, Anki
+flashcards and a Q&A assistant that answers with verified quotes from your classes.
+See [docs/study-copilot.md](docs/study-copilot.md) for how it works and where everything is stored.
+
+```bash
+npm run demo     # try the whole dashboard with sample classes (separate folder, no setup)
+```
 
 ---
 
@@ -23,6 +30,11 @@ a clean local dashboard.
   stats (localhost only)
 - 📝 **Structured logging** — JSON logs with sensitive field redaction
 - 📸 **Screenshots on failure** — Automatic capture for debugging
+- 🎧 **Study campus** — player with alert markers, synced transcript, notes with clickable `[mm:ss]` + formulas
+- 🔎 **Global search** — FTS5, accent/typo tolerant, jumps to the exact minute
+- ⚠️ **Critical alerts + calendar** — exams, deadlines, grading, warnings → `.ics`
+- 🃏 **Flashcards** — spaced repetition in the dashboard and Anki export (basic + cloze)
+- 💬 **Ask your classes** — hybrid retrieval with verified citations
 
 ## Prerequisites
 
@@ -68,6 +80,8 @@ Copy `.env.example` to `.env` and set:
 | `BROWSER_HEADED` | Show browser window | `true` |
 | `DASHBOARD_PORT` | Dashboard port (localhost only) | `3000` |
 | `LOG_LEVEL` | Log verbosity | `info` |
+| `GEMINI_API_KEY` | Optional: notes, alerts, flashcards, Q&A | — |
+| `DATA_DIR` | Root for audio/transcripts/exports | `./data` |
 
 See [.env.example](.env.example) for all options.
 
@@ -84,6 +98,14 @@ npm run serve
 
 # Both: Sync then start dashboard
 npm run dev
+
+# Study copilot (see docs/study-copilot.md)
+npm run ingest                 # import data/transcripts into SQLite
+npm run study                  # notes, alerts, flashcards (needs GEMINI_API_KEY)
+npm run search -- "Von Mises"  # instant full-text search
+npm run ask -- "¿Qué entra en el examen?"
+npm run export                 # Anki, .ics, Obsidian → data/exports
+npm run demo                   # sample library + dashboard
 ```
 
 ### First Run
@@ -169,6 +191,7 @@ See [docs/threat-model.md](docs/threat-model.md) for the full security analysis.
 - [x] **Milestone 2**: Read-only player capability inspection & sanitization
 - [x] **Milestone 3**: In-browser digital audio capture pipeline (zero mic, FFmpeg 16kHz mono normalization)
 - [x] **Milestone 4**: Local-only faster-whisper speech-to-text proof of concept (TXT/SRT/VTT/JSON, auto-stop)
+- [x] **Milestone 5**: Study copilot — timestamped notes, FTS5 search, alerts + calendar, flashcards, RAG Q&A, campus dashboard
 
 ## License
 

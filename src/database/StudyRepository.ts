@@ -202,15 +202,15 @@ export class StudyRepository {
     let inserted = 0;
     const run = this.db.transaction(() => {
       this.db.prepare('DELETE FROM alerts WHERE recording_id = ? AND confirmed = 0 AND dismissed = 0').run(recordingId);
+      // Alerts the user already decided on. A regenerated alert for the same moment (the model may
+      // place it a few seconds off) is the same alert, not a new one.
       const kept = this.db
         .prepare('SELECT kind, t_ms FROM alerts WHERE recording_id = ?')
         .all(recordingId) as { kind: string; t_ms: number }[];
-      const seen = new Set(kept.map((a) => `${a.kind}@${a.t_ms}`));
+      const near = (kind: string, t: number) => kept.some((k) => k.kind === kind && Math.abs(k.t_ms - t) <= 20_000);
 
       for (const a of alerts) {
-        const key = `${a.kind}@${a.t_ms}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        if (near(a.kind, a.t_ms)) continue; // only against decisions already made, not within the new batch
         insert.run(
           recordingId,
           a.kind,
@@ -235,7 +235,7 @@ export class StudyRepository {
       where.push('a.recording_id = ?');
       params.push(filter.recordingId);
     }
-    if (filter.course) {
+    if (filter.course !== undefined) {
       where.push('r.course = ?');
       params.push(filter.course);
     }
@@ -313,7 +313,7 @@ export class StudyRepository {
       where.push('f.recording_id = ?');
       params.push(filter.recordingId);
     }
-    if (filter.course) {
+    if (filter.course !== undefined) {
       where.push('r.course = ?');
       params.push(filter.course);
     }
@@ -347,10 +347,10 @@ export class StudyRepository {
 
   // ── Glossary ────────────────────────────────────────────────────────────
 
-  upsertGlossary(recordingId: number, course: string, terms: GlossaryInput[]): number {
+  upsertGlossary(recordingId: number, terms: GlossaryInput[]): number {
     const insert = this.db.prepare(
-      `INSERT INTO glossary (recording_id, course, term, definition, t_ms) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(course, term) DO UPDATE SET
+      `INSERT INTO glossary (recording_id, term, definition, t_ms) VALUES (?, ?, ?, ?)
+       ON CONFLICT(recording_id, term) DO UPDATE SET
          definition = CASE WHEN length(excluded.definition) > length(glossary.definition)
                            THEN excluded.definition ELSE glossary.definition END`
     );
@@ -359,7 +359,7 @@ export class StudyRepository {
       for (const t of terms) {
         const term = t.term.trim();
         if (!term) continue;
-        insert.run(recordingId, course, term, t.definition.trim(), t.t_ms ?? 0);
+        insert.run(recordingId, term, t.definition.trim(), t.t_ms ?? 0);
         n++;
       }
     });
@@ -367,23 +367,35 @@ export class StudyRepository {
     return n;
   }
 
+  listGlossaryForRecording(recordingId: number): GlossaryRow[] {
+    return this.db
+      .prepare('SELECT * FROM glossary WHERE recording_id = ? ORDER BY term COLLATE NOCASE')
+      .all(recordingId) as GlossaryRow[];
+  }
+
+  /** Distinct terms of a course (the same term from several classes appears once). */
   listGlossary(course?: string): GlossaryRow[] {
-    return (
-      course === undefined
-        ? this.db.prepare('SELECT * FROM glossary ORDER BY course, term COLLATE NOCASE').all()
-        : this.db.prepare('SELECT * FROM glossary WHERE course = ? ORDER BY term COLLATE NOCASE').all(course)
-    ) as GlossaryRow[];
+    const where = course === undefined ? '' : 'WHERE r.course = ?';
+    return this.db
+      .prepare(
+        `SELECT g.id, g.recording_id, g.term, g.definition, g.t_ms, r.course AS course
+         FROM glossary g JOIN recordings r ON r.id = g.recording_id ${where}
+         GROUP BY r.course, lower(g.term)
+         ORDER BY g.term COLLATE NOCASE`
+      )
+      .all(...(course === undefined ? [] : [course])) as GlossaryRow[];
   }
 
   // ── RAG chunks ──────────────────────────────────────────────────────────
 
-  replaceChunks(recordingId: number, chunks: ChunkInput[]): number[] {
+  /** Replace the chunks of one source only, so changing the notes never discards transcript embeddings. */
+  replaceChunks(recordingId: number, source: 'transcript' | 'notes', chunks: ChunkInput[]): number[] {
     const insert = this.db.prepare(
       'INSERT INTO chunks (recording_id, source, start_ms, end_ms, text) VALUES (?, ?, ?, ?, ?)'
     );
     const ids: number[] = [];
     const run = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM chunks WHERE recording_id = ?').run(recordingId);
+      this.db.prepare('DELETE FROM chunks WHERE recording_id = ? AND source = ?').run(recordingId, source);
       for (const c of chunks) {
         ids.push(Number(insert.run(recordingId, c.source, c.start_ms, c.end_ms, c.text).lastInsertRowid));
       }
@@ -405,7 +417,7 @@ export class StudyRepository {
   getChunks(filter: { course?: string; recordingId?: number } = {}): (ChunkRow & { recording_title: string; course: string })[] {
     const where: string[] = [];
     const params: unknown[] = [];
-    if (filter.course) {
+    if (filter.course !== undefined) {
       where.push('r.course = ?');
       params.push(filter.course);
     }
@@ -422,12 +434,46 @@ export class StudyRepository {
       .all(...params) as (ChunkRow & { recording_title: string; course: string })[];
   }
 
-  countChunksMissingEmbedding(): number {
-    return (this.db.prepare('SELECT count(*) AS n FROM chunks WHERE embedding IS NULL').get() as { n: number }).n;
+  countChunks(recordingId: number): number {
+    return (this.db.prepare('SELECT count(*) AS n FROM chunks WHERE recording_id = ?').get(recordingId) as { n: number }).n;
   }
 
-  getChunksMissingEmbedding(): { id: number; text: string }[] {
-    return this.db.prepare('SELECT id, text FROM chunks WHERE embedding IS NULL').all() as { id: number; text: string }[];
+  /** Chunks with no vector, or a vector from a different embedding model/dimension. */
+  countChunksMissingEmbedding(model?: string): number {
+    return (
+      this.db
+        .prepare('SELECT count(*) AS n FROM chunks WHERE embedding IS NULL OR (? IS NOT NULL AND embedding_model IS NOT ?)')
+        .get(model ?? null, model ?? null) as { n: number }
+    ).n;
+  }
+
+  getChunksMissingEmbedding(model: string): { id: number; text: string }[] {
+    return this.db
+      .prepare('SELECT id, text FROM chunks WHERE embedding IS NULL OR embedding_model IS NOT ?')
+      .all(model) as { id: number; text: string }[];
+  }
+
+  /** Vectors only (no text) for semantic scoring; text is fetched for the winners afterwards. */
+  getVectors(model: string, course?: string): { id: number; embedding: Buffer }[] {
+    return this.db
+      .prepare(
+        `SELECT c.id, c.embedding FROM chunks c
+         ${course === undefined ? '' : 'JOIN recordings r ON r.id = c.recording_id AND r.course = ?'}
+         WHERE c.embedding IS NOT NULL AND c.embedding_model = ?`
+      )
+      .all(...(course === undefined ? [model] : [course, model])) as { id: number; embedding: Buffer }[];
+  }
+
+  getChunksByIds(ids: number[]): (ChunkRow & { recording_title: string; course: string })[] {
+    if (ids.length === 0) return [];
+    return this.db
+      .prepare(
+        `SELECT c.id, c.recording_id, c.source, c.start_ms, c.end_ms, c.text, NULL AS embedding, c.embedding_model,
+                r.title AS recording_title, r.course AS course
+         FROM chunks c JOIN recordings r ON r.id = c.recording_id
+         WHERE c.id IN (${ids.map(() => '?').join(',')})`
+      )
+      .all(...ids) as (ChunkRow & { recording_title: string; course: string })[];
   }
 
   // ── Library overview ────────────────────────────────────────────────────

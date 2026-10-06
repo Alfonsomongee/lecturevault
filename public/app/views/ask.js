@@ -1,5 +1,5 @@
 // Ask your classes: RAG answers with verified, clickable citations.
-import { api, html, raw, mount, esc, renderMarkdown, msClock, toast, store } from '../util.js';
+import { api, html, raw, mount, esc, renderMarkdown, msClock, toast, store, courseLabel } from '../util.js';
 import { state } from '../main.js';
 
 const history = [];
@@ -18,7 +18,7 @@ export async function renderAsk(root, params) {
     <div class="chat" id="chat" aria-live="polite"></div>
     <div class="ask-bar"><form id="ask-form" autocomplete="off">
       <label class="sr-only" for="ask-input">Pregunta</label>
-      <input id="ask-input" placeholder="${state.course ? `Pregunta sobre ${state.course}…` : 'Pregunta sobre cualquiera de tus clases…'}" maxlength="500">
+      <input id="ask-input" placeholder="${state.course ? `Pregunta sobre ${courseLabel(state.course)}…` : 'Pregunta sobre cualquiera de tus clases…'}" maxlength="500">
       <button class="btn primary" type="submit">Preguntar</button></form></div>`);
 
   const chat = root.querySelector('#chat');

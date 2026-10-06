@@ -1,5 +1,5 @@
 // Search results: grouped by class, highlighted, each hit jumps to the exact moment.
-import { api, html, mount, highlight, msClock } from '../util.js';
+import { api, html, mount, highlight, msClock, courseLabel } from '../util.js';
 import { state } from '../main.js';
 
 export async function renderSearch(root, params) {
@@ -26,7 +26,7 @@ export async function renderSearch(root, params) {
   }
 
   mount(root, html`
-    <div class="page-head"><div><div class="eyebrow">Búsqueda global${state.course ? ` · ${state.course}` : ''}</div>
+    <div class="page-head"><div><div class="eyebrow">Búsqueda global${state.course ? ` · ${courseLabel(state.course)}` : ''}</div>
       <h1>“${q}”</h1>
       <p>${data.hits.length ? `${data.hits.length} resultado${data.hits.length === 1 ? '' : 's'} en ${groups.size} clase${groups.size === 1 ? '' : 's'} · ${ms} ms` : 'Sin resultados'}</p></div>
       <a class="btn" href="#/ask?q=${encodeURIComponent(q)}">💬 Preguntar a la IA</a></div>

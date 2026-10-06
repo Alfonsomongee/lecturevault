@@ -1,5 +1,5 @@
 // App shell: state, hash router, sidebar, global search, shortcuts.
-import { api, html, raw, mount, esc, store, initTheme, courseColor, toast, fmtDate } from './util.js';
+import { api, html, raw, mount, esc, store, initTheme, courseColor, courseLabel, NO_COURSE, toast, fmtDate } from './util.js';
 import { renderLibrary } from './views/library.js';
 import { renderRecording } from './views/recording.js';
 import { renderSearch } from './views/search.js';
@@ -26,7 +26,7 @@ export async function refreshMeta() {
   state.courses = data.courses || [];
   state.stats = data.stats || {};
   state.ai = !!data.ai;
-  if (state.course && !state.courses.some((c) => c.course === state.course)) state.course = '';
+  if (state.course && !state.courses.some((c) => (c.course || NO_COURSE) === state.course)) state.course = '';
   drawChrome();
   return data;
 }
@@ -83,8 +83,8 @@ function drawChrome() {
     <button class="course-link" type="button" data-course="" aria-pressed="${state.course === ''}">
       <span class="dot" style="background:var(--muted)"></span>Todas<small>${total}</small></button>
     ${state.courses.map((c) => html`
-      <button class="course-link" type="button" data-course="${c.course}" aria-pressed="${state.course === c.course}">
-        <span class="dot" style="background:${courseColor(state.courses, c.course)}"></span>${c.course || 'Sin asignatura'}<small>${c.count}</small></button>`)}`);
+      <button class="course-link" type="button" data-course="${c.course || NO_COURSE}" aria-pressed="${state.course === (c.course || NO_COURSE)}">
+        <span class="dot" style="background:${courseColor(state.courses, c.course)}"></span>${courseLabel(c.course)}<small>${c.count}</small></button>`)}`);
   mount(document.getElementById('side-foot'), html`
     <div class="ai-state ${state.ai ? 'on' : ''}"><i></i>${state.ai ? 'IA de Gemini activa' : 'IA desactivada'}</div>
     ${state.ai ? '' : html`<span>Añade <code>GEMINI_API_KEY</code> a <code>.env</code> para generar apuntes, avisos y tarjetas.</span>`}

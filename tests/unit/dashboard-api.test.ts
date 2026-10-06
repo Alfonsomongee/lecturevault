@@ -214,6 +214,41 @@ describe('Dashboard API', () => {
       expect(res.json.error).toMatch(/GEMINI_API_KEY/);
     });
 
+    it('lists dismissed alerts so they can be restored after a reload', async () => {
+      const id = (await get('/api/alerts')).json.alerts[0].id;
+      await send('PATCH', `/api/alerts/${id}`, { dismissed: true });
+      const after = (await get('/api/alerts')).json.alerts.find((a: any) => a.id === id);
+      expect(after.dismissed).toBe(1);
+      expect((await get(`/api/recordings/${recId}`)).json.alerts.some((a: any) => a.id === id && a.dismissed)).toBe(true);
+      expect((await get('/api/recordings')).json.recordings[0].alert_count).toBe(0);
+      await send('PATCH', `/api/alerts/${id}`, { dismissed: false });
+    });
+
+    it('rejects impossible calendar dates', async () => {
+      const id = (await get('/api/alerts')).json.alerts[0].id;
+      for (const bad of ['2026-02-31', '2026-13-45', '2026-1-5']) {
+        expect((await send('PATCH', `/api/alerts/${id}`, { due_date: bad })).status, bad).toBe(400);
+      }
+      expect((await send('PATCH', `/api/recordings/${recId}`, { date: '2026-02-30' })).status).toBe(400);
+    });
+
+    it('lets the user correct the class date and filter recordings without a course', async () => {
+      const ok = await send('PATCH', `/api/recordings/${recId}`, { date: '2026-03-04' });
+      expect(new Date(ok.json.recording.created_at).getDate()).toBe(4);
+      await send('PATCH', `/api/recordings/${recId}`, { course: '' });
+      expect((await get('/api/recordings?course=__none__')).json.recordings).toHaveLength(1);
+      expect((await get('/api/search?q=cype&course=__none__')).json.hits.length).toBeGreaterThan(0);
+      expect((await get('/api/flashcards?course=__none__')).json.flashcards).toHaveLength(1);
+      await send('PATCH', `/api/recordings/${recId}`, { course: 'Simulación' });
+    });
+
+    it('answers 429 with a useful message when the quota endpoints are hammered', async () => {
+      let last: Res | undefined;
+      for (let i = 0; i < 8; i++) last = await send('POST', '/api/ingest', {});
+      expect(last!.status).toBe(429);
+      expect(last!.json.error).toMatch(/espera/);
+    });
+
     it('confirms alerts and validates dates', async () => {
       const alertId = (await get('/api/alerts')).json.alerts[0].id;
       const ok = await send('PATCH', `/api/alerts/${alertId}`, { confirmed: true, due_date: '2026-03-21' });
@@ -248,9 +283,10 @@ describe('Dashboard API', () => {
     });
 
     it('re-ingests transcripts on demand', async () => {
-      const res = await send('POST', '/api/ingest', {});
-      expect(res.json.result.scanned).toBe(1);
-      expect(res.json.result.updatedSegments).toBe(0);
+      // (the previous test exhausted the ingest limiter on purpose; call the ingestor directly)
+      const result = new TranscriptIngestor(db, tmp, logger).ingestAll();
+      expect(result.scanned).toBe(1);
+      expect(result.updatedSegments).toBe(0);
     });
   });
 

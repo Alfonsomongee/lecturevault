@@ -386,10 +386,54 @@ describe('RAG', () => {
     expect(new StudyRepository(db.handle).getChunks({ course: 'Estructuras' })).toHaveLength(1);
   });
 
+  it('keeps finished batches when a later batch fails, and resumes without redoing them', async () => {
+    const study = new StudyRepository(db.handle);
+    const rec = db.getRecordingByTranscriptId('clase_cype')!.id;
+    study.replaceChunks(rec, 'notes', Array.from({ length: 120 }, (_, i) => ({ source: 'notes' as const, start_ms: i, end_ms: i, text: `nota ${i} sobre cype` })));
+
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      calls++;
+      if (calls === 3) return { ok: false, status: 400, statusText: 'x', text: async () => 'boom' };
+      const body = JSON.parse(String((init as RequestInit).body));
+      return { ok: true, json: async () => ({ embeddings: body.requests.map((r: any) => ({ values: embed(r.content.parts[0].text) })) }) };
+    }));
+    const rag = new Rag(db.handle, new GeminiClient({ apiKey: KEY, backoffMs: 0 }), logger);
+    await expect(rag.indexEmbeddings()).rejects.toThrow();
+    const stillMissing = study.countChunksMissingEmbedding(`gemini-embedding-001:768`);
+    expect(stillMissing).toBeGreaterThan(0);
+    expect(stillMissing).toBeLessThan(120 + 3); // the first two batches were saved
+
+    calls = 100; // service recovers
+    await rag.indexEmbeddings();
+    expect(study.countChunksMissingEmbedding(`gemini-embedding-001:768`)).toBe(0);
+  });
+
+  it('re-embeds chunks whose vectors came from another embedding model', async () => {
+    vi.stubGlobal('fetch', mockGemini({ found: false, answer: '', citations: [] }));
+    const rag = new Rag(db.handle, new GeminiClient({ apiKey: KEY, backoffMs: 0 }), logger);
+    await rag.indexEmbeddings();
+    db.handle.prepare("UPDATE chunks SET embedding_model = 'old-model:768'").run();
+    expect(await rag.indexEmbeddings()).toBe(3);
+    const stale = new Rag(db.handle, new GeminiClient({ apiKey: KEY, embeddingModel: 'other-model', backoffMs: 0 }), logger);
+    const { mode } = await stale.retrieve('CYPE');
+    expect(mode).toBe('lexical'); // vectors from a different model are never compared
+  });
+
+  it('concurrent indexing runs share one request instead of embedding twice', async () => {
+    const fetchMock = mockGemini({ found: false, answer: '', citations: [] });
+    vi.stubGlobal('fetch', fetchMock);
+    const rag = new Rag(db.handle, new GeminiClient({ apiKey: KEY, backoffMs: 0 }), logger);
+    const [a, b] = await Promise.all([rag.indexEmbeddings(), rag.indexEmbeddings()]);
+    expect(a).toBe(3);
+    expect(b).toBe(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('degrades to BM25 when the embedding service fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400, statusText: 'x', text: async () => 'bad' }));
     const rag = new Rag(db.handle, new GeminiClient({ apiKey: KEY, backoffMs: 0 }), logger);
-    db.handle.prepare("UPDATE chunks SET embedding = zeroblob(4), embedding_model = 'x'").run();
+    db.handle.prepare("UPDATE chunks SET embedding = zeroblob(4), embedding_model = 'gemini-embedding-001:768'").run();
     const { chunks, mode } = await rag.retrieve('CYPE');
     expect(mode).toBe('lexical');
     expect(chunks.length).toBeGreaterThan(0);

@@ -92,3 +92,31 @@ The primary attack surfaces are:
 | **LMS Metadata (Titles, URLs)**| **Internal** | SQLite Database | Indefinite / User managed. |
 | **Application Logs** | **Internal** | Local file system (`.log`) | Rolling (e.g., 10MB max, keep last 3). |
 | **App Configuration** | **Public** | `config.json` (or similar) | Indefinite. |
+
+## 8. Study Copilot addendum (Gemini, notes, search, Q&A)
+
+The study copilot adds a second kind of data leaving the machine and a richer dashboard. What changed:
+
+### 8.1 What leaves the machine
+
+| Data | Goes to | When | Notes |
+| :--- | :--- | :--- | :--- |
+| **Audio** | nowhere | never | Captured and transcribed locally (faster-whisper). Unchanged. |
+| **Transcript text** | Google Gemini API | only with `GEMINI_API_KEY` set, when you run `study` / "Generar con IA" | Needed for notes, alerts, flashcards, glossary. |
+| **Questions + retrieved fragments** | Google Gemini API | `ask` / chat, only with a key | Only the ~8 most relevant fragments, not the whole library. |
+| **Text chunks for embeddings** | Google Gemini API | first `study`/`ask` after new classes, only with a key | Vectors are stored locally in SQLite. |
+| Credentials, cookies, browser profile | nowhere | never | Unchanged. |
+
+On Google's free tier, API content may be used to improve their products; check the current terms before sending sensitive material. Without a key, everything except notes/flashcards/Q&A synthesis still works (search, player, transcript, export).
+
+### 8.2 New threats and mitigations
+
+| ID | Threat | Mitigation |
+| :--- | :--- | :--- |
+| **T9** | **Any web page you visit calls the local API** (CSRF / DNS rebinding against `localhost:3000`). | Every request must carry an expected `Host`; every mutating request must be `application/json` and, if it has an `Origin`, match the dashboard origin. Server binds to `127.0.0.1` only. |
+| **T10** | **XSS via LLM-generated Markdown** rendered in the dashboard. | Markdown is parsed with `marked`, sanitised with DOMPurify, and only then decorated (timestamps, KaTeX). All other UI text is escaped by a templating helper. Strict CSP: `script-src 'self'`, no inline script, no external hosts, `frame-ancestors 'none'`. Covered by an e2e test. |
+| **T11** | **Prompt injection from transcript text** (a recording says "ignore previous instructions…"). | The model only returns schema-constrained JSON. Alerts/flashcards are kept only if their `evidence` quote is found in the transcript; Q&A citations are verified against the retrieved fragments; fragments are labelled as data. The model has no tools and no network access. |
+| **T12** | **Path traversal through ids** (audio/transcript lookup). | Files are located from the database + a validated id (`[A-Za-z0-9_-]{1,80}`), served with `sendFile(root)`. Covered by a test that tampers the DB id. |
+| **T13** | **API key leakage.** | Key sent in the `x-goog-api-key` header (never in URLs, logs or error messages); `.env` is git-ignored. |
+| **T14** | **Hallucinated deadlines the student trusts.** | Dates are validated deterministically against the class date; low-confidence/relative dates are flagged "dudoso", every alert links to the exact audio moment, and calendar export can be limited to confirmed alerts. |
+| **T15** | **Data loss.** | Files in `data/` are the source of truth; SQLite indexes are rebuildable (`npm run ingest`). User state (confirmations, reviews) lives only in the DB: back it up (see docs/study-copilot.md). |

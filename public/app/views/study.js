@@ -4,6 +4,7 @@ import { state, refreshMeta, onLeave } from '../main.js';
 
 const BOX_LABELS = ['Hoy', '1 día', '3 días', '7 días', '21 días'];
 let practice = false;
+let activeKeys = null; // renderStudy re-runs when toggling practice mode: never stack key handlers
 
 export async function renderStudy(root) {
   const qs = (extra = '') => `?${state.course ? `course=${encodeURIComponent(state.course)}&` : ''}${extra}`;
@@ -93,8 +94,10 @@ export async function renderStudy(root) {
     else if (revealed && e.key === '1') answer(false);
     else if (revealed && e.key === '2') answer(true);
   };
+  if (activeKeys) removeEventListener('keydown', activeKeys);
+  activeKeys = keys;
   addEventListener('keydown', keys);
-  onLeave(() => removeEventListener('keydown', keys));
+  onLeave(() => { removeEventListener('keydown', keys); if (activeKeys === keys) activeKeys = null; });
   draw();
   void raw;
 }

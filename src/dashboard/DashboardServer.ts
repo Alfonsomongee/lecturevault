@@ -27,6 +27,7 @@ import { TranscriptIngestor } from '../library/TranscriptIngestor.js';
 import { findPlaybackAudio } from '../library/audio.js';
 import { segmentsToVtt } from '../library/transcript-files.js';
 import { buildAnkiTsv, buildIcs } from '../study/exporters.js';
+import { parseIso } from '../study/dates.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +40,9 @@ export interface DashboardConfig {
   geminiModel?: string;
   geminiEmbeddingModel?: string;
 }
+
+/** Query value that selects recordings without a course (an empty string means "no filter" in URLs). */
+export const NO_COURSE = '__none__';
 
 class HttpError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -148,10 +152,13 @@ export class DashboardServer {
 
   /** Tiny in-memory limiter for the endpoints that cost API quota. */
   private limit(name: string, max: number, windowMs = 60_000): RequestHandler {
-    return (_req, _res, next) => {
+    return (_req, res, next) => {
       const now = Date.now();
       const hits = (this.rate.get(name) ?? []).filter((t) => now - t < windowMs);
-      if (hits.length >= max) throw new HttpError(429, 'Demasiadas peticiones; espera un momento.');
+      if (hits.length >= max) {
+        res.status(429).json({ error: 'Demasiadas peticiones; espera un momento.' });
+        return;
+      }
       hits.push(now);
       this.rate.set(name, hits);
       next();
@@ -195,6 +202,12 @@ export class DashboardServer {
     return typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined;
   }
 
+  /** `?course=` filter: absent/blank → all courses; "__none__" → recordings without a course. */
+  private course(value: unknown): string | undefined {
+    const text = this.str(value, 80);
+    return text === NO_COURSE ? '' : text;
+  }
+
   private hasAudio(transcriptId: string | null): boolean {
     return findPlaybackAudio(this.dataDir, transcriptId) !== null;
   }
@@ -212,7 +225,7 @@ export class DashboardServer {
     api.get('/recordings', this.wrap((req, res) => {
       const status = req.query['status'] as RecordingStatus | undefined;
       const valid: RecordingStatus[] = ['new', 'seen', 'processed'];
-      const course = this.str(req.query['course']);
+      const course = this.course(req.query['course']);
       const recordings = this.study
         .getOverview({ status: status && valid.includes(status) ? status : undefined, course })
         .map((r) => ({ ...r, has_audio: this.hasAudio(r.transcript_id) }));
@@ -241,9 +254,9 @@ export class DashboardServer {
         recording: rec,
         has_audio: this.hasAudio(rec.transcript_id),
         notes: notes ? { markdown: notes.markdown, model: notes.model, created_at: notes.created_at } : null,
-        alerts: this.study.listAlerts({ recordingId: rec.id }),
+        alerts: this.study.listAlerts({ recordingId: rec.id, includeDismissed: true }),
         flashcards: this.study.listFlashcards({ recordingId: rec.id }),
-        glossary: this.study.listGlossary(rec.course).filter((g) => g.recording_id === rec.id),
+        glossary: this.study.listGlossaryForRecording(rec.id),
         ai: this.client.hasKey,
       });
     }));
@@ -251,8 +264,14 @@ export class DashboardServer {
     api.patch('/recordings/:id', this.wrap((req, res) => {
       const rec = this.recording(req);
       const course = typeof req.body?.course === 'string' ? req.body.course.trim().slice(0, 80) : undefined;
-      if (course === undefined) throw new HttpError(400, 'Falta "course"');
-      this.db.setCourse(rec.id, course);
+      const date = req.body?.date;
+      if (course === undefined && date === undefined) throw new HttpError(400, 'Falta "course" o "date"');
+      if (course !== undefined) this.db.setCourse(rec.id, course === NO_COURSE ? '' : course);
+      if (date !== undefined) {
+        // The class date anchors relative deadlines ("hasta el día 20"), so it must be a real calendar day
+        if (typeof date !== 'string' || !parseIso(date)) throw new HttpError(400, 'Fecha no válida (usa AAAA-MM-DD)');
+        this.db.setCreatedAt(rec.id, new Date(`${date}T10:00:00`).toISOString());
+      }
       res.json({ recording: this.db.getRecordingById(rec.id) });
     }));
 
@@ -314,7 +333,7 @@ export class DashboardServer {
         return;
       }
       const recordingId = this.optionalId(req.query['recording']);
-      res.json(this.search.search(q, { course: this.str(req.query['course']), recordingId, limit: 60 }));
+      res.json(this.search.search(q, { course: this.course(req.query['course']), recordingId, limit: 60 }));
     }));
 
     // Ask your classes
@@ -323,19 +342,19 @@ export class DashboardServer {
       if (!question) throw new HttpError(400, 'Escribe una pregunta');
       const rag = new Rag(this.db.handle, this.client, this.logger);
       if (this.client.hasKey) await rag.indexEmbeddings().catch((err) => this.logger.warn({ err }, 'embeddings'));
-      res.json(await rag.ask(question, { course: this.str(req.body?.course) }));
+      res.json(await rag.ask(question, { course: this.course(req.body?.course) }));
     }));
 
     // Alerts + calendar
     api.get('/alerts', this.wrap((req, res) => {
-      res.json({ alerts: this.study.listAlerts({ course: this.str(req.query['course']) }) });
+      res.json({ alerts: this.study.listAlerts({ course: this.course(req.query['course']), includeDismissed: true }) });
     }));
 
     api.patch('/alerts/:id', this.wrap((req, res) => {
       const id = this.parseId(req.params['id']);
       if (!this.study.getAlert(id)) throw new HttpError(404, 'Aviso no encontrado');
       const { confirmed, dismissed, due_date } = req.body ?? {};
-      if (due_date !== undefined && due_date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(due_date))) {
+      if (due_date !== undefined && due_date !== null && !parseIso(String(due_date))) {
         throw new HttpError(400, 'Fecha no válida (usa AAAA-MM-DD)');
       }
       this.study.updateAlert(id, {
@@ -347,7 +366,7 @@ export class DashboardServer {
     }));
 
     api.get('/calendar.ics', this.wrap((req, res) => {
-      let alerts = this.study.listAlerts({ course: this.str(req.query['course']) });
+      let alerts = this.study.listAlerts({ course: this.course(req.query['course']) });
       if (req.query['confirmed'] === '1') alerts = alerts.filter((a) => a.confirmed);
       res
         .type('text/calendar; charset=utf-8')
@@ -360,7 +379,7 @@ export class DashboardServer {
       const recordingId = this.optionalId(req.query['recording']);
       res.json({
         flashcards: this.study.listFlashcards({
-          course: this.str(req.query['course']),
+          course: this.course(req.query['course']),
           recordingId,
           dueOnly: req.query['due'] === '1',
           limit: 500,
@@ -378,7 +397,7 @@ export class DashboardServer {
     api.get('/export/anki', this.wrap((req, res) => {
       const kind = req.query['kind'] === 'cloze' ? 'cloze' : 'basic';
       const recordingId = this.optionalId(req.query['recording']);
-      const cards = this.study.listFlashcards({ course: this.str(req.query['course']), recordingId, limit: 5000 });
+      const cards = this.study.listFlashcards({ course: this.course(req.query['course']), recordingId, limit: 5000 });
       res
         .type('text/tab-separated-values; charset=utf-8')
         .set('Content-Disposition', `attachment; filename="lecturevault-anki-${kind}.txt"`)
@@ -386,7 +405,7 @@ export class DashboardServer {
     }));
 
     api.get('/glossary', this.wrap((req, res) => {
-      res.json({ glossary: this.study.listGlossary(this.str(req.query['course'])) });
+      res.json({ glossary: this.study.listGlossary(this.course(req.query['course'])) });
     }));
 
     api.use((_req, res) => {

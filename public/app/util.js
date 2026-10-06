@@ -83,6 +83,10 @@ export const kindChip = (kind) => {
   return html`<span class="kind" style="--c:${k.color}">${k.icon} ${k.label}</span>`;
 };
 
+/** Sidebar/URL value for recordings that have no course yet */
+export const NO_COURSE = '__none__';
+export const courseLabel = (c) => (!c || c === NO_COURSE ? 'Sin asignatura' : c);
+
 // A stable colour per course so sidebar dots and tables agree
 const COURSE_COLORS = ['var(--k-exam)', 'var(--k-deadline)', 'var(--k-grading)', 'var(--k-formula)', 'var(--k-warning)'];
 export const courseColor = (courses, name) => {
@@ -92,6 +96,7 @@ export const courseColor = (courses, name) => {
 
 // ── markdown + math + clickable timestamps ─────────────────
 const CLOCK_RE = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g;
+const HAS_CLOCK = /\[\d{1,2}:\d{2}(?::\d{2})?\]/;
 const toSeconds = (c) => c.split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
 
 function extractMath(src) {
@@ -122,8 +127,8 @@ function stampTimestamps(root) {
     acceptNode: (n) => (n.parentElement && n.parentElement.closest('code, pre, button') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
   });
   const nodes = [];
-  while (walker.nextNode()) if (CLOCK_RE.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
-  CLOCK_RE.lastIndex = 0;
+  // A fresh, non-global regex per test: a shared /g regex keeps `lastIndex` between nodes and skips matches
+  while (walker.nextNode()) if (HAS_CLOCK.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
   for (const node of nodes) {
     const frag = document.createDocumentFragment();
     let last = 0;

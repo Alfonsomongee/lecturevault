@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import type { Logger } from 'pino';
 import type { DatabaseManager } from '../database/DatabaseManager.js';
 import { StudyRepository } from '../database/StudyRepository.js';
@@ -44,10 +45,13 @@ export class TranscriptIngestor {
     const result: IngestResult = { scanned: 0, linked: 0, created: 0, updatedSegments: 0, importedNotes: 0, skipped: [] };
     if (!fs.existsSync(this.transcriptsDir)) return result;
 
+    // Recordings still waiting for a transcript folder, computed once for the whole run
+    const candidates = this.db.getAllRecordings().filter((r) => !r.transcript_id);
+
     for (const entry of fs.readdirSync(this.transcriptsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       try {
-        this.ingestOne(entry.name, result, options.course);
+        this.ingestOne(entry.name, result, options.course, candidates);
       } catch (err) {
         result.skipped.push(`${entry.name}: ${(err as Error).message}`);
         this.logger?.warn({ err, id: entry.name }, 'No se pudo ingerir la transcripción');
@@ -57,7 +61,7 @@ export class TranscriptIngestor {
   }
 
   /** Ingest one transcript folder by id. Returns the recording it belongs to. */
-  ingestOne(transcriptId: string, result?: IngestResult, course?: string): RecordingRow {
+  ingestOne(transcriptId: string, result?: IngestResult, course?: string, candidates?: RecordingRow[]): RecordingRow {
     const acc = result ?? { scanned: 0, linked: 0, created: 0, updatedSegments: 0, importedNotes: 0, skipped: [] };
     if (!isSafeTranscriptId(transcriptId)) throw new Error('identificador no válido');
 
@@ -71,16 +75,15 @@ export class TranscriptIngestor {
     // 1. Find or create the recording this folder belongs to
     let recording = this.db.getRecordingByTranscriptId(transcriptId);
     if (!recording) {
-      const match = this.db
-        .getAllRecordings()
-        .find(
-          (r) =>
-            !r.transcript_id &&
-            (sanitizeRecordingId(r.collab_id) === transcriptId || sanitizeRecordingId(r.title) === transcriptId)
-        );
+      const pool = candidates ?? this.db.getAllRecordings().filter((r) => !r.transcript_id);
+      // Prefer the exact Collab2 id; fall back to the title only when it is unambiguous
+      const byId = pool.filter((r) => sanitizeRecordingId(r.collab_id) === transcriptId);
+      const byTitle = pool.filter((r) => sanitizeRecordingId(r.title) === transcriptId);
+      const match = byId.length === 1 ? byId[0] : byId.length === 0 && byTitle.length === 1 ? byTitle[0] : undefined;
       if (match) {
         this.db.setTranscriptId(match.id, transcriptId);
         recording = this.db.getRecordingById(match.id)!;
+        if (candidates) candidates.splice(candidates.indexOf(match), 1);
         acc.linked++;
       }
     }
@@ -97,16 +100,15 @@ export class TranscriptIngestor {
       this.db.setCourse(recording.id, course);
     }
 
-    // 2. Segments (+ transcript chunks) only when the transcript changed
-    const existing = this.study.getSegments(recording.id);
-    const lastExisting = existing[existing.length - 1];
-    const lastNew = transcript.segments[transcript.segments.length - 1];
-    const unchanged =
-      existing.length === transcript.segments.length &&
-      (existing.length === 0 || Math.round(lastNew!.end * 1000) === lastExisting!.end_ms);
-
-    if (!unchanged) {
+    // 2. Segments (+ transcript chunks) only when the transcript really changed
+    const hash = createHash('sha1')
+      .update(transcript.segments.map((s) => `${s.start}|${s.end}|${s.text}`).join('\n'))
+      .digest('hex');
+    const transcriptChanged = recording.segments_hash !== hash;
+    if (transcriptChanged) {
       this.study.replaceSegments(recording.id, transcript.segments);
+      this.study.replaceChunks(recording.id, 'transcript', chunkSegments(transcript.segments));
+      this.db.setSegmentsHash(recording.id, hash);
       acc.updatedSegments++;
     }
 
@@ -123,12 +125,13 @@ export class TranscriptIngestor {
       }
     }
 
-    // 4. Rebuild chunks when either source changed (embeddings are recomputed lazily)
-    if (!unchanged || notesChanged || this.study.getChunks({ recordingId: recording.id }).length === 0) {
-      const chunks = [...chunkSegments(transcript.segments)];
-      const notes = this.study.getNotes(recording.id);
-      if (notes) chunks.push(...chunkNotes(notes.markdown));
-      this.study.replaceChunks(recording.id, chunks);
+    // 4. Chunks: rebuilt per source, so new notes never discard transcript embeddings
+    const notes = this.study.getNotes(recording.id);
+    if (this.study.countChunks(recording.id) === 0) {
+      this.study.replaceChunks(recording.id, 'transcript', chunkSegments(transcript.segments));
+      this.study.replaceChunks(recording.id, 'notes', notes ? chunkNotes(notes.markdown) : []);
+    } else if (notesChanged) {
+      this.study.replaceChunks(recording.id, 'notes', notes ? chunkNotes(notes.markdown) : []);
     }
 
     if (recording.status !== 'processed') this.db.updateStatus(recording.collab_id, 'processed');

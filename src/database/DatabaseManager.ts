@@ -186,6 +186,33 @@ export class DatabaseManager {
     this.stmts.setTranscriptId.run(transcriptId, id);
   }
 
+  /** Correct the class date (local captures only know when they were transcribed) */
+  public setCreatedAt(id: number, createdAt: string): void {
+    this.db.prepare('UPDATE recordings SET created_at = ? WHERE id = ?').run(createdAt, id);
+  }
+
+  public setSegmentsHash(id: number, hash: string): void {
+    this.db.prepare('UPDATE recordings SET segments_hash = ? WHERE id = ?').run(hash, id);
+  }
+
+  /**
+   * Link a recording to a transcript folder. If a placeholder "local:" recording already owns the
+   * folder (e.g. the dashboard imported it first), it is folded into this one instead of colliding.
+   */
+  public linkTranscript(recordingId: number, transcriptId: string): void {
+    const run = this.db.transaction(() => {
+      const owner = this.getRecordingByTranscriptId(transcriptId);
+      if (owner && owner.id !== recordingId) {
+        if (!owner.collab_id.startsWith('local:')) {
+          throw new Error(`La carpeta "${transcriptId}" ya pertenece a otra grabación de Collab2.`);
+        }
+        this.db.prepare('DELETE FROM recordings WHERE id = ?').run(owner.id); // cascades derived data
+      }
+      this.stmts.setTranscriptId.run(transcriptId, recordingId);
+    });
+    run();
+  }
+
   /**
    * Create a recording that exists only locally (captured manually, not listed in Collab2).
    * Its collab_id is namespaced with "local:" so it can never collide with a Collab2 id.

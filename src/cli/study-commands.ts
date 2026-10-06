@@ -20,6 +20,7 @@ import { convertToOpus, findPlaybackAudio } from '../library/audio.js';
 import { DashboardServer } from '../dashboard/DashboardServer.js';
 import { seedDemo } from '../demo/seed.js';
 import { msToClock } from '../utils/time.js';
+import { parseIso } from '../study/dates.js';
 
 function args(options: Record<string, { type: 'string' | 'boolean'; short?: string }>) {
   return parseArgs({ args: process.argv.slice(3), options, allowPositionals: true, strict: false });
@@ -251,9 +252,15 @@ export async function finalizeTranscript(
   config: AppConfig,
   logger: Logger,
   transcriptId: string,
-  course?: string
+  course?: string,
+  /** YYYY-MM-DD of the class; local captures only know when they were transcribed */
+  classDate?: string
 ): Promise<PipelineReport | null> {
-  const recording = new TranscriptIngestor(db, config.dataDir, logger).ingestOne(transcriptId, undefined, course);
+  let recording = new TranscriptIngestor(db, config.dataDir, logger).ingestOne(transcriptId, undefined, course);
+  if (classDate && parseIso(classDate)) {
+    db.setCreatedAt(recording.id, new Date(`${classDate}T10:00:00`).toISOString());
+    recording = db.getRecordingById(recording.id)!;
+  }
   const pipeline = new StudyPipeline(db, pipelineConfig(config), logger);
   if (!pipeline.hasAi) return null;
   return pipeline.process(recording.id);

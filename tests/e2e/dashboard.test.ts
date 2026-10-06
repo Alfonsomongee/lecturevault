@@ -95,6 +95,15 @@ test.describe('Recording', () => {
     await expect(page.locator('.seg.is-current')).toContainText('Para definir las restricciones');
   });
 
+  test('every [mm:ss] in the notes becomes a clickable timestamp (regression: shared /g regex)', async ({ page }) => {
+    const { notes } = await (await page.request.get(`${demo.url}/api/recordings/${mallado}`)).json();
+    const expected = (notes.markdown.match(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g) ?? []).length;
+    expect(expected).toBeGreaterThan(10);
+    await page.goto(`${demo.url}/#/r/${mallado}`);
+    await expect(page.locator('.prose button.ts')).toHaveCount(expected);
+    expect(await page.locator('.prose').innerText()).not.toMatch(/\[\d{1,2}:\d{2}\]/);
+  });
+
   test('transcript click seeks and ?t= deep links position the player', async ({ page }) => {
     await page.goto(`${demo.url}/#/r/${mallado}?t=80`);
     await audioReady(page);
@@ -174,6 +183,32 @@ test.describe('Search, agenda, study, ask', () => {
     await page.keyboard.press('2');
     await expect(page.locator('.flash-progress')).toContainText('2 /');
     await expect(page.locator('.flash-progress')).toContainText('1 ✓');
+  });
+
+  test('toggling practice mode does not stack keyboard handlers (regression)', async ({ page }) => {
+    await page.goto(`${demo.url}/#/study`);
+    await page.locator('#mode').click();
+    await page.locator('#mode').click();
+    await page.locator('#mode').click();
+    await expect(page.locator('.flash-progress')).toContainText('1 /');
+    await page.keyboard.press('Space');
+    await page.keyboard.press('2');
+    await expect(page.locator('.flash-progress')).toContainText('2 /');
+    await expect(page.locator('.flash-progress')).toContainText('1 ✓');
+  });
+
+  test('dismissed alerts survive a reload and can be restored', async ({ page }) => {
+    await page.goto(`${demo.url}/#/agenda`);
+    const first = page.locator('.alert').first();
+    const text = await first.locator('.txt').innerText();
+    await first.getByRole('button', { name: /Descartar/ }).click();
+    await expect(page.locator('.alert', { hasText: text })).toHaveCount(0);
+    await page.reload();
+    await page.locator('#show-done').check();
+    const dismissed = page.locator('.alert.is-done', { hasText: text });
+    await expect(dismissed).toBeVisible();
+    await dismissed.getByRole('button', { name: 'Restaurar' }).click();
+    await expect(page.locator('.alert.is-done', { hasText: text })).toHaveCount(0);
   });
 
   test('ask works without an AI key by showing relevant fragments', async ({ page }) => {

@@ -36,6 +36,8 @@ export interface RecordingRow {
   course: string;
   /** Folder name under data/transcripts (and audio stem) once captured */
   transcript_id: string | null;
+  /** Fingerprint of the stored transcript segments */
+  segments_hash: string | null;
 }
 
 /** Application configuration loaded from environment */

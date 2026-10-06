@@ -1,5 +1,5 @@
 // Library: KPI tiles, what's next, and recordings grouped by course.
-import { api, html, mount, duration, fmtDate, courseColor, daysUntil, relativeDay, kindChip, toast, esc } from '../util.js';
+import { api, html, mount, duration, fmtDate, courseColor, courseLabel, daysUntil, relativeDay, kindChip, toast, esc } from '../util.js';
 import { state, refreshMeta, renderRoute, go } from '../main.js';
 
 let filter = 'all';
@@ -102,7 +102,7 @@ export async function renderLibrary(root) {
         ${[['all', 'Todas'], ['new', 'Nuevas'], ['seen', 'Vistas'], ['processed', 'Procesadas']].map(([k, l]) =>
           html`<button class="filter-btn ${filter === k ? 'active' : ''}" data-filter="${k}" type="button">${l}</button>`)}
       </div>
-      ${state.course ? html`<span class="badge">Asignatura: ${state.course} <button class="btn sm ghost" data-clear-course type="button" aria-label="Quitar filtro">✕</button></span>` : ''}
+      ${state.course ? html`<span class="badge">Asignatura: ${courseLabel(state.course)} <button class="btn sm ghost" data-clear-course type="button" aria-label="Quitar filtro">✕</button></span>` : ''}
     </div>
 
     ${rs.length === 0 ? html`
