@@ -50,6 +50,7 @@ def run_transcription():
     parser.add_argument("--vad_filter", action="store_true", default=True, help="Enable Silero VAD filter")
     parser.add_argument("--output_dir", default="", help="Directory for transcript outputs")
     parser.add_argument("--model_dir", default="./data/models", help="Directory where model weights are stored")
+    parser.add_argument("--hotwords", default="", help="Comma-separated technical terms to bias recognition (faster-whisper >= 1.1)")
 
     args = parser.parse_args()
 
@@ -83,12 +84,22 @@ def run_transcription():
     print(f"Transcribing audio file: {audio_file.name}...")
     transcribe_start = time.time()
 
-    segments_generator, info = model.transcribe(
-        str(audio_file),
+    transcribe_kwargs = dict(
         language=args.language,
         beam_size=args.beam_size,
-        vad_filter=args.vad_filter
+        vad_filter=args.vad_filter,
     )
+    hotwords = ", ".join(w.strip() for w in args.hotwords.split(",") if w.strip())[:400]
+    if hotwords:
+        transcribe_kwargs["hotwords"] = hotwords
+
+    try:
+        segments_generator, info = model.transcribe(str(audio_file), **transcribe_kwargs)
+    except TypeError:
+        # faster-whisper < 1.1 has no `hotwords`: transcribe without biasing instead of failing
+        transcribe_kwargs.pop("hotwords", None)
+        print("Aviso: esta versión de faster-whisper no admite hotwords; se transcribe sin ellas.")
+        segments_generator, info = model.transcribe(str(audio_file), **transcribe_kwargs)
 
     segments_data = []
     plain_text_lines = []

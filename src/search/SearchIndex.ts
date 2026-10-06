@@ -171,6 +171,16 @@ export class SearchIndex {
       )
       .all(match, ...params, Math.ceil(limit / 2)) as SearchHit[];
 
+    // Notes chunks are markdown paragraphs: show clean text and jump to the tag nearest the match
+    for (const hit of notes) {
+      const tag = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/.exec(hit.snippet);
+      if (tag) {
+        const parts = tag[1]!.split(':').map(Number);
+        hit.startMs = parts.reduce((acc, n) => acc * 60 + n, 0) * 1000;
+      }
+      hit.snippet = hit.snippet.replace(/[#*_>`]+/g, '').replace(/\s+/g, ' ').trim();
+    }
+
     // bm25 ranks are comparable within one index; interleave by rank, notes first on ties
     return [...notes, ...transcript].sort((a, b) => a.rank - b.rank).slice(0, limit);
   }

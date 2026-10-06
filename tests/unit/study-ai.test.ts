@@ -323,7 +323,7 @@ describe('RAG', () => {
     expect(queryTokens('¿En qué clase explicó el profesor cómo definir las restricciones en Ansys?')).toEqual(
       expect.arrayContaining(['definir', 'restricciones', 'ansys'])
     );
-    expect(queryTokens('¿Qué peso tenía la práctica de CYPE?')).toContain('cype');
+    expect(queryTokens('¿Qué peso tenía la práctica de CYPE?')).toEqual(expect.arrayContaining(['peso', 'cype']));
   });
 
   it('works without any API key: lexical sources, no generated answer', async () => {
@@ -332,6 +332,9 @@ describe('RAG', () => {
     expect(res.mode).toBe('lexical');
     expect(res.answer).toBeNull();
     expect(res.sources[0]!.recordingTitle).toContain('clase cype');
+    // inflections: the question says "peso", the class says "pesa"
+    const inflected = await rag.ask('¿Cuánto pesan las restricciones?');
+    expect(inflected.sources.some((s) => s.recordingTitle.includes('clase ansys'))).toBe(true);
     expect(res.sources[0]!.startMs).toBe(65_000);
   });
 

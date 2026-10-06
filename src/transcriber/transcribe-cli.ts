@@ -18,6 +18,8 @@ export interface TranscribeOptions {
   device?: string;
   computeType?: string;
   language?: string;
+  /** Technical terms (course glossary) to bias recognition */
+  hotwords?: string[];
 }
 
 export function validateInputFilePath(inputRaw: string, baseDir: string = process.cwd()): string {
@@ -84,6 +86,13 @@ export async function runTranscriptionCli(options: TranscribeOptions): Promise<n
     '--beam_size', '5',
     '--vad_filter'
   ];
+
+  const hotwords = (options.hotwords ?? [])
+    .map((w) => w.replace(/[\u0000-\u001f,]/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 60)
+    .join(', ');
+  if (hotwords) args.push('--hotwords', hotwords);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(pythonVenvExe, args, { stdio: 'inherit' });

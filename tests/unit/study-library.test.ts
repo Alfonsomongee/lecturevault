@@ -206,6 +206,12 @@ describe('study library', () => {
       expect(new Set(res.hits.map((h) => h.source))).toEqual(new Set(['transcript', 'notes']));
     });
 
+    it('cleans markdown in note hits and jumps to the nearest [mm:ss] tag', () => {
+      const hit = search.search('cype').hits.find((h) => h.source === 'notes')!;
+      expect(hit.snippet).not.toMatch(/[#*]/);
+      expect(hit.startMs).toBe(860_000); // the [14:20] tag shown in the snippet
+    });
+
     it('tolerates ASR typos and reports the correction', () => {
       const res = search.search('ansis');
       expect(res.corrected).toEqual([{ from: 'ansis', to: 'ansys' }]);

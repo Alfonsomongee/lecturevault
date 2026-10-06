@@ -22,8 +22,9 @@ const MAX_FRAGMENT_CHARS = 1500;
 const QUESTION_STOPWORDS = new Set([
   'que', 'como', 'cual', 'cuales', 'cuando', 'donde', 'quien', 'por', 'para', 'con', 'sin', 'una', 'uno',
   'unos', 'unas', 'los', 'las', 'del', 'que', 'era', 'fue', 'son', 'hay', 'habia', 'tenia', 'tenian',
-  'clase', 'clases', 'profesor', 'profesora', 'explico', 'dijo', 'sobre', 'este', 'esta', 'esto', 'peso',
+  'clase', 'clases', 'profesor', 'profesora', 'explico', 'dijo', 'sobre', 'este', 'esta', 'esto',
   'mas', 'muy', 'les', 'nos', 'mis', 'sus', 'han', 'ser', 'estar', 'esa', 'ese', 'eso', 'entre', 'hasta',
+  'tiene', 'tienen', 'tendra', 'sera', 'seran', 'debe', 'deben', 'hacer', 'hace', 'hacen', 'cuanto', 'cuantos',
 ]);
 
 export interface RetrievedChunk {
@@ -91,6 +92,16 @@ function normalizeWs(text: string): string {
   return fold(text).replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Light Spanish stemming by prefix: "restricciones"/"restricción" and "pesa"/"pesar" share a stem,
+ * so BM25 still finds them without a language-specific tokenizer. Short words stay exact.
+ */
+export function stem(token: string): string {
+  if (token.length >= 7) return token.slice(0, token.length - 2);
+  if (token.length >= 5) return token.slice(0, token.length - 1);
+  return token;
+}
+
 /** Words of a question worth searching for. */
 export function queryTokens(question: string): string[] {
   const tokens = tokenize(question).filter((t) => t.length >= 3 && !QUESTION_STOPWORDS.has(t));
@@ -131,7 +142,7 @@ export class Rag {
 
   private lexical(tokens: string[], course: string | undefined, limit: number): number[] {
     if (tokens.length === 0) return [];
-    const match = tokens.map((t) => `"${t}"`).join(' OR ');
+    const match = tokens.map((t) => (stem(t) === t ? `"${t}"` : `"${stem(t)}"*`)).join(' OR ');
     const rows = this.db
       .prepare(
         `SELECT c.id FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid

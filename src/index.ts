@@ -6,11 +6,16 @@
  *   npx tsx src/index.ts sync           — Scrape recordings from Collab2 (automated flow)
  *   npx tsx src/index.ts serve          — Start the local dashboard
  *   npx tsx src/index.ts sync-and-serve — Scrape then start dashboard
+ *   npx tsx src/index.ts ingest         — Import data/transcripts into SQLite (search, notes)
+ *   npx tsx src/index.ts study          — Generate notes, alerts, flashcards, embeddings (Gemini)
+ *   npx tsx src/index.ts search "texto" — Full-text search across all classes
+ *   npx tsx src/index.ts ask "pregunta" — Ask your classes (RAG with verified citations)
+ *   npx tsx src/index.ts export         — Anki files, .ics calendar, Obsidian notes
+ *   npx tsx src/index.ts optimize-audio — Small Opus copies for the dashboard player
+ *   npx tsx src/index.ts demo           — Demo library + dashboard (safe: separate data folder)
  */
 
 import readline from 'node:readline';
-import path from 'node:path';
-import fs from 'node:fs';
 import { loadConfig } from './utils/config.js';
 import { createLogger } from './utils/logger.js';
 import { BrowserManager } from './browser/BrowserManager.js';
@@ -21,6 +26,12 @@ import { DashboardServer } from './dashboard/DashboardServer.js';
 import { DiagnosticsManager } from './utils/diagnostics.js';
 import { AudioCaptureManager } from './capture/AudioCaptureManager.js';
 import { runTranscriptionCli } from './transcriber/transcribe-cli.js';
+import {
+  runIngest, runStudy, runSearch, runAsk, runExport, runOptimizeAudio, runDemo,
+  finalizeTranscript, printReport,
+} from './cli/study-commands.js';
+import { StudyPipeline } from './study/StudyPipeline.js';
+import { TranscriptIngestor } from './library/TranscriptIngestor.js';
 import type { SyncResult, RecordingRow, RecordingStatus } from './types.js';
 
 function askUserConfirmation(question: string): Promise<string> {
@@ -345,7 +356,27 @@ async function runSync(config: ReturnType<typeof loadConfig>, logger: ReturnType
 
 async function runServe(config: ReturnType<typeof loadConfig>, logger: ReturnType<typeof createLogger>): Promise<void> {
   const db = new DatabaseManager(config.databasePath, logger);
-  const dashboard = new DashboardServer(db, { port: config.dashboardPort }, logger);
+  const dashboard = new DashboardServer(
+    db,
+    {
+      port: config.dashboardPort,
+      dataDir: config.dataDir,
+      geminiApiKey: config.geminiApiKey,
+      geminiModel: config.geminiModel,
+      geminiEmbeddingModel: config.geminiEmbeddingModel,
+    },
+    logger
+  );
+
+  // Pick up transcripts captured since the last run so the dashboard is never stale
+  try {
+    const ingested = new TranscriptIngestor(db, config.dataDir, logger).ingestAll();
+    if (ingested.created + ingested.linked + ingested.updatedSegments > 0) {
+      logger.info(ingested, 'Transcripciones importadas al arrancar');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'No se pudieron importar transcripciones al arrancar');
+  }
 
   const shutdown = async () => {
     logger.info('Shutting down dashboard...');
@@ -536,13 +567,17 @@ async function runCaptureAndTranscribe(
   let durationSec = 0;
   let model = 'small';
   let customName = '';
+  let course = '';
   let speed = 1.0;
   let silent = false;
   let headless = false;
   let useEdge = process.env.BROWSER_CHANNEL === 'msedge';
 
   for (let i = 0; i < args.length; i++) {
-    if ((args[i] === '--duration' || args[i] === '-d') && args[i + 1]) {
+    if ((args[i] === '--course' || args[i] === '-c') && args[i + 1]) {
+      course = args[i + 1]!;
+      i++;
+    } else if ((args[i] === '--duration' || args[i] === '-d') && args[i + 1]) {
       durationSec = parseInt(args[i + 1]!, 10) || 0;
       i++;
     } else if ((args[i] === '--model' || args[i] === '-m') && args[i + 1]) {
@@ -772,26 +807,19 @@ async function runCaptureAndTranscribe(
         model,
       });
 
-      // Si hay clave de Gemini configurada, refinar y generar apuntes limpios
-      if (config.geminiApiKey) {
-        console.log('\n✨ [GEMINI AI STUDIO] Filtrando ruido oral y estructurando apuntes limpios...');
-        try {
-          const { TranscriptRefiner } = await import('./ai/TranscriptRefiner.js');
-          const refiner = new TranscriptRefiner({
-            apiKey: config.geminiApiKey,
-            logger: capLogger,
-          });
-          const rawTxtPath = path.resolve('data', 'transcripts', result.recordingId, `${result.recordingId}.txt`);
-          if (fs.existsSync(rawTxtPath)) {
-            const refined = await refiner.refineTranscriptFile(rawTxtPath);
-            console.log(`✅ Apuntes limpios generados con éxito:`);
-            console.log(`   - Texto plano: ${refined.cleanTxtPath}`);
-            console.log(`   - Markdown:    ${refined.cleanMdPath}\n`);
-          }
-        } catch (aiErr) {
-          capLogger.warn({ err: aiErr }, 'No se pudo completar el refinado con Gemini');
-          console.warn('⚠️ Aviso: No se pudo refinar con Gemini:', aiErr instanceof Error ? aiErr.message : aiErr);
-        }
+      // Indexar la transcripción y, si hay clave de Gemini, generar apuntes, avisos y tarjetas
+      const studyDb = new DatabaseManager(config.databasePath, capLogger);
+      try {
+        console.log('\n✨ Indexando la transcripción y preparando tu material de estudio...');
+        const report = await finalizeTranscript(studyDb, config, capLogger, result.recordingId, course || undefined);
+        if (report) printReport(result.recordingId, report);
+        else console.log('ℹ️  Sin GEMINI_API_KEY: transcripción indexada para búsqueda. Añade la clave para generar apuntes con IA.');
+        console.log('   Abre el dashboard con "npm run serve" para verlo.\n');
+      } catch (aiErr) {
+        capLogger.warn({ err: aiErr }, 'No se pudo completar el procesado de estudio');
+        console.warn('⚠️ Aviso: no se pudo procesar con IA:', aiErr instanceof Error ? aiErr.message : aiErr);
+      } finally {
+        studyDb.close();
       }
     }
 
@@ -1131,28 +1159,22 @@ Ejemplos:
 
         // Transcribir con faster-whisper
         console.log(`  🚀 Transcribiendo con faster-whisper (${model})...`);
+        // Los términos de clases anteriores de la asignatura sesgan a Whisper hacia el vocabulario correcto
+        const hotwords = new StudyPipeline(db, { dataDir: config.dataDir }, batchLogger).courseTerms(rec.course);
         await runTranscriptionCli({
           inputFile: captureRes.wavPath,
           model,
+          hotwords,
         });
 
-        // Refinar apuntes con Gemini si hay API Key
-        if (config.geminiApiKey) {
-          console.log('  ✨ Refinando apuntes con Gemini AI Studio...');
-          try {
-            const { TranscriptRefiner } = await import('./ai/TranscriptRefiner.js');
-            const refiner = new TranscriptRefiner({
-              apiKey: config.geminiApiKey,
-              logger: batchLogger,
-            });
-            const rawTxtPath = path.resolve('data', 'transcripts', captureRes.recordingId, `${captureRes.recordingId}.txt`);
-            if (fs.existsSync(rawTxtPath)) {
-              const refined = await refiner.refineTranscriptFile(rawTxtPath);
-              console.log(`  📝 Apuntes limpios generados en: ${refined.cleanTxtPath}`);
-            }
-          } catch (aiErr) {
-            batchLogger.warn({ err: aiErr }, 'Aviso: No se pudo completar el refinado de Gemini.');
-          }
+        // Indexar y, si hay API Key, generar apuntes + avisos + tarjetas
+        try {
+          console.log('  ✨ Preparando material de estudio...');
+          db.setTranscriptId(db.getRecordingByCollabId(rec.collab_id)!.id, captureRes.recordingId);
+          const report = await finalizeTranscript(db, config, batchLogger, captureRes.recordingId);
+          if (report) printReport(rec.title, report);
+        } catch (aiErr) {
+          batchLogger.warn({ err: aiErr }, 'Aviso: No se pudo completar el procesado de estudio.');
         }
 
         // Actualizar estado en SQLite
@@ -1201,6 +1223,41 @@ async function main(): Promise<void> {
   switch (command) {
     case 'batch-transcribe': {
       await runBatchTranscribe(config, logger);
+      break;
+    }
+
+    case 'ingest': {
+      await runIngest(config, logger);
+      break;
+    }
+
+    case 'study': {
+      await runStudy(config, logger);
+      break;
+    }
+
+    case 'search': {
+      await runSearch(config, logger);
+      break;
+    }
+
+    case 'ask': {
+      await runAsk(config, logger);
+      break;
+    }
+
+    case 'export': {
+      await runExport(config, logger);
+      break;
+    }
+
+    case 'optimize-audio': {
+      await runOptimizeAudio(config, logger);
+      break;
+    }
+
+    case 'demo': {
+      await runDemo(config, logger);
       break;
     }
 
@@ -1255,7 +1312,7 @@ async function main(): Promise<void> {
     }
 
     default:
-      logger.error({ command }, 'Unknown command. Use: batch-transcribe, capture-and-transcribe, capture-audio, inspect-player, accept-manual, sync, serve, or sync-and-serve');
+      logger.error({ command }, 'Unknown command. Use: batch-transcribe, capture-and-transcribe, capture-audio, inspect-player, accept-manual, sync, serve, sync-and-serve, ingest, study, search, ask, export, optimize-audio or demo');
       process.exit(1);
   }
 }

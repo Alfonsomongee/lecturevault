@@ -8,6 +8,8 @@ export default defineConfig({
   workers: 1,
   reporter: 'html',
   use: {
+    // Optional: point at a locally installed Chromium (PW_CHROMIUM_PATH) instead of the bundled one
+    launchOptions: { executablePath: process.env['PW_CHROMIUM_PATH'] || undefined },
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
