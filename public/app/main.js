@@ -1,5 +1,5 @@
 // App shell: state, hash router, sidebar, global search, shortcuts.
-import { api, html, raw, mount, esc, store, initTheme, courseColor, courseLabel, NO_COURSE, toast, fmtDate } from './util.js';
+import { api, html, raw, mount, store, initTheme, courseColor, courseLabel, NO_COURSE, toast, isTyping } from './util.js';
 import { renderLibrary } from './views/library.js';
 import { renderRecording } from './views/recording.js';
 import { renderSearch } from './views/search.js';
@@ -21,14 +21,18 @@ export function setCourse(course) {
   renderRoute();
 }
 
-export async function refreshMeta() {
-  const data = await api('/api/recordings');
+/** Single place where sidebar/nav data is updated (the library view feeds it from its own fetch). */
+export function applyMeta(data) {
   state.courses = data.courses || [];
   state.stats = data.stats || {};
   state.ai = !!data.ai;
   if (state.course && !state.courses.some((c) => (c.course || NO_COURSE) === state.course)) state.course = '';
   drawChrome();
-  return data;
+}
+
+/** Light endpoint: counts and courses only, not the whole library. */
+export async function refreshMeta() {
+  applyMeta(await api('/api/meta'));
 }
 
 function parseHash() {
@@ -114,7 +118,7 @@ input.addEventListener('input', () => {
 export function go(hash) { if (location.hash === hash) renderRoute(); else location.hash = hash; }
 
 addEventListener('keydown', (e) => {
-  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+  const typing = isTyping();
   if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) {
     e.preventDefault();
     input.focus();
@@ -135,4 +139,3 @@ addEventListener('hashchange', renderRoute);
   setInterval(() => { refreshMeta().catch(() => {}); }, 60000);
 })();
 
-export { esc, fmtDate };

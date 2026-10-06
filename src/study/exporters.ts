@@ -6,6 +6,7 @@
 import type { AlertRow, FlashcardRow } from '../database/StudyRepository.js';
 import type { RecordingRow } from '../types.js';
 import { msToClock } from '../utils/time.js';
+import { addDays, parseIso, toIso } from './dates.js';
 
 function escapeHtml(text: string): string {
   return text
@@ -18,7 +19,7 @@ function escapeHtml(text: string): string {
 
 /** Plain text → single-line HTML (Anki is imported with #html:true). */
 function htmlText(text: string): string {
-  return escapeHtml(text).replace(/\r?\n/g, '<br>').replace(/\t/g, ' ');
+  return escapeHtml(text).replace(/\r\n|\r|\n/g, '<br>').replace(/\t/g, ' ');
 }
 
 /** A leading/embedded quote would be read as CSV quoting by Anki → wrap and double quotes. */
@@ -75,7 +76,7 @@ function icsEscape(text: string): string {
     .replace(/\\/g, '\\\\')
     .replace(/;/g, '\\;')
     .replace(/,/g, '\\,')
-    .replace(/\r?\n/g, '\\n');
+    .replace(/\r\n|\r|\n/g, '\\n');
 }
 
 /** RFC 5545 §3.1: lines are folded at 75 *octets*; continuation lines start with one space. */
@@ -103,8 +104,8 @@ function icsDate(iso: string): string {
 }
 
 function icsNextDay(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10).replace(/-/g, '');
+  const day = parseIso(iso);
+  return day ? toIso(addDays(day, 1)).replace(/-/g, '') : icsDate(iso);
 }
 
 function icsStamp(now: Date): string {

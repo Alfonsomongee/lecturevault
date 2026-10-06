@@ -14,8 +14,7 @@ import {
   localCalendarDate, resolveDateText, sanitizeDueDate, toIso, weekdayName, type CalendarDate,
 } from './dates.js';
 import { parseClock } from '../utils/time.js';
-
-export const STUDY_PROMPT_VERSION = '1';
+import { foldWs } from '../utils/text.js';
 
 const MAX_ALERTS = 40;
 const MAX_CARDS = 30;
@@ -139,10 +138,6 @@ function stripStamp(t: unknown): string {
   return typeof t === 'string' ? t.replace(/[[\]\s]/g, '') : '';
 }
 
-function foldKey(text: string): string {
-  return text.normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
 /** Validate and ground the model's output. Pure function: all the trust logic lives here. */
 export function validateStudyOutput(raw: RawStudy, segments: TranscriptSegment[], context: StudyContext): StudyOutput {
   const classDate: CalendarDate = localCalendarDate(context.classDate);
@@ -209,7 +204,7 @@ export function validateStudyOutput(raw: RawStudy, segments: TranscriptSegment[]
     if (!kind || !front || (kind === 'basic' && !back)) { dropped.flashcards++; continue; }
     if (kind === 'cloze' && !/\{\{c\d+::.+?\}\}/.test(front)) { dropped.flashcards++; continue; }
 
-    const key = foldKey(front);
+    const key = foldWs(front);
     if (seenFronts.has(key)) { dropped.flashcards++; continue; }
 
     // A card is only kept if its evidence is really in the transcript.
@@ -231,7 +226,7 @@ export function validateStudyOutput(raw: RawStudy, segments: TranscriptSegment[]
   for (const g of (raw.glossary ?? []).slice(0, MAX_TERMS * 2)) {
     const term = clamp(g.term, 80);
     if (!term) continue;
-    const key = foldKey(term);
+    const key = foldWs(term);
     if (terms.has(key)) continue;
     terms.set(key, { term, definition: clamp(g.definition, 400), t_ms: hint(g.t) });
     if (terms.size >= MAX_TERMS) break;

@@ -9,6 +9,9 @@
  */
 
 import type Database from 'better-sqlite3';
+import { fold } from '../utils/text.js';
+
+export { fold };
 
 /** Control characters wrapped around matched words in snippets; the UI converts them to <mark>. */
 export const MARK_OPEN = '\u0001';
@@ -38,10 +41,6 @@ export interface SearchResponse {
   hits: SearchHit[];
 }
 
-/** lower-case + strip diacritics, mirroring what the FTS tokenizer does */
-export function fold(text: string): string {
-  return text.normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase();
-}
 
 export function tokenize(input: string): string[] {
   return fold(input).match(/[\p{L}\p{N}]+/gu) ?? [];

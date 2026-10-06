@@ -367,6 +367,19 @@ export class StudyRepository {
     return n;
   }
 
+  /** Terms of a course, most recent class first: spelling hints for the AI and hotwords for Whisper. */
+  courseTerms(course: string, limit = 60): string[] {
+    if (!course) return [];
+    return (
+      this.db
+        .prepare(
+          `SELECT g.term FROM glossary g JOIN recordings r ON r.id = g.recording_id
+           WHERE r.course = ? GROUP BY lower(g.term) ORDER BY max(r.created_at) DESC, g.term COLLATE NOCASE LIMIT ?`
+        )
+        .all(course, limit) as { term: string }[]
+    ).map((t) => t.term);
+  }
+
   listGlossaryForRecording(recordingId: number): GlossaryRow[] {
     return this.db
       .prepare('SELECT * FROM glossary WHERE recording_id = ? ORDER BY term COLLATE NOCASE')

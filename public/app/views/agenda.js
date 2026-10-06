@@ -1,12 +1,11 @@
 // Agenda: month calendar + dated deadlines + "keep in mind" warnings, with .ics export.
-import { api, html, mount, KINDS, kindChip, fmtDate, daysUntil, relativeDay, isoParts } from '../util.js';
+import { api, html, mount, KINDS, kindChip, isoParts, isoLocal } from '../util.js';
 import { state, refreshMeta } from '../main.js';
 import { alertCard, bindAlertActions } from './alerts-ui.js';
 
 let monthOffset = 0;
 let showDone = false;
 
-const pad = (n) => String(n).padStart(2, '0');
 const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 export async function renderAgenda(root) {
@@ -25,11 +24,11 @@ export async function renderAgenda(root) {
     const cells = [];
     for (let i = 0; i < Math.ceil((first + daysInMonth) / 7) * 7; i++) {
       const d = new Date(base.getFullYear(), base.getMonth(), 1 - first + i);
-      cells.push({ d, iso: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, other: d.getMonth() !== base.getMonth() });
+      cells.push({ d, iso: isoLocal(d), other: d.getMonth() !== base.getMonth() });
     }
     const byDay = new Map();
     for (const a of dated) { if (!byDay.has(a.due_date)) byDay.set(a.due_date, []); byDay.get(a.due_date).push(a); }
-    const todayIso = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    const todayIso = isoLocal(today);
 
     const groups = new Map();
     for (const a of dated) {
@@ -44,15 +43,14 @@ export async function renderAgenda(root) {
       if (!undatedByCourse.has(k)) undatedByCourse.set(k, []);
       undatedByCourse.get(k).push(a);
     }
-    const q = state.course ? `?course=${encodeURIComponent(state.course)}` : '';
 
     mount(root, html`
       <div class="page-head">
         <div><div class="eyebrow">Lo que dijo el profesor</div><h1>Agenda y avisos críticos</h1>
           <p>Fechas, exámenes y advertencias extraídos de tus clases. Confirma los dudosos escuchando el momento exacto antes de exportarlos.</p></div>
         <div class="chip-row">
-          <a class="btn primary" href="/api/calendar.ics${q}" download>📅 Exportar .ics</a>
-          <a class="btn" href="/api/calendar.ics${q}${q ? '&' : '?'}confirmed=1" download title="Solo las fechas que confirmaste">✓ Solo confirmadas</a>
+          <a class="btn primary" href="/api/calendar.ics${qs}" download>📅 Exportar .ics</a>
+          <a class="btn" href="/api/calendar.ics${qs}${qs ? '&' : '?'}confirmed=1" download title="Solo las fechas que confirmaste">✓ Solo confirmadas</a>
           <label class="follow"><input type="checkbox" id="show-done" ${showDone ? 'checked' : ''}> Mostrar descartados</label>
         </div>
       </div>
@@ -101,5 +99,4 @@ export async function renderAgenda(root) {
   draw();
   // Delegated once on the root so redraws don't stack listeners
   bindAlertActions(root, alerts, () => { draw(); refreshMeta().catch(() => {}); });
-  void fmtDate; void daysUntil; void relativeDay;
 }

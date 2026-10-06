@@ -33,6 +33,15 @@ export async function api(path, options = {}) {
 }
 
 // ── formatting ─────────────────────────────────────────────
+/** True while the user is typing in a form control (global shortcuts must stay out of the way). */
+export const isTyping = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+
+/** Local calendar day as YYYY-MM-DD (never UTC: the student's day is the one on their wall). */
+export const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Lower-case + strip accents, matching what the FTS tokenizer does on the server. */
+export const fold = (t) => String(t).normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase();
+
 export const clock = (sec) => {
   const s = Math.max(0, Math.floor(sec || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;

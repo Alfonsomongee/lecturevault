@@ -72,8 +72,7 @@ export class StudyPipeline {
 
   /** Terms learned from earlier classes of the same course (spelling + Whisper hotwords). */
   courseTerms(course: string, limit = 60): string[] {
-    if (!course) return [];
-    return this.study.listGlossary(course).slice(0, limit).map((g) => g.term);
+    return this.study.courseTerms(course, limit);
   }
 
   async process(recordingId: number, options: PipelineOptions = {}): Promise<PipelineReport> {

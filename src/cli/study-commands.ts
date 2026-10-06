@@ -21,6 +21,7 @@ import { DashboardServer } from '../dashboard/DashboardServer.js';
 import { seedDemo } from '../demo/seed.js';
 import { msToClock } from '../utils/time.js';
 import { parseIso } from '../study/dates.js';
+import { fold } from '../utils/text.js';
 
 function args(options: Record<string, { type: 'string' | 'boolean'; short?: string }>) {
   return parseArgs({ args: process.argv.slice(3), options, allowPositionals: true, strict: false });
@@ -155,7 +156,7 @@ export async function runAsk(config: AppConfig, logger: Logger): Promise<void> {
 }
 
 function slug(text: string): string {
-  return text.normalize('NFD').replace(/\p{M}+/gu, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'sin-asignatura';
+  return fold(text).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'sin-asignatura';
 }
 
 /** `export` — Anki files, calendar and an Obsidian vault under data/exports. */

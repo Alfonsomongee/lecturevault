@@ -1,20 +1,17 @@
 // Recording: custom audio player with alert markers, synced transcript, interactive notes.
 import {
-  api, html, raw, mount, esc, clock, msClock, fmtDate, duration, KINDS, kindChip, renderMarkdown, richText,
-  relativeDay, store, toast,
+  api, html, raw, mount, esc, clock, msClock, fmtDate, duration, KINDS, renderMarkdown, richText,
+  store, toast, isTyping, isoLocal, fold,
 } from '../util.js';
 import { state, refreshMeta, renderRoute, onLeave } from '../main.js';
+import { alertCard, bindAlertActions } from './alerts-ui.js';
 
-const localDate = (iso) => {
-  const d = new Date(iso);
-  return isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-const fold = (t) => t.normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase();
+const localDate = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : isoLocal(d); };
 
 export async function renderRecording(root, id, params) {
   const [detail, segData] = await Promise.all([api(`/api/recordings/${id}`), api(`/api/recordings/${id}/segments`)]);
   const { recording: rec, notes, has_audio: hasAudio, ai } = detail;
-  let { alerts, flashcards } = detail;
+  const { alerts, flashcards } = detail;
   const glossary = detail.glossary;
   const segments = segData.segments;
   const totalSec = Math.max(rec.duration_seconds || 0, (segments.at(-1)?.end_ms || 0) / 1000);
@@ -128,10 +125,9 @@ export async function renderRecording(root, id, params) {
   drawNotes();
 
   // ── Seeking / time sync ──────────────────────────────────
-  const seg = segments.map((s, i) => ({ ...s, i }));
   const findSeg = (ms) => {
-    let lo = 0, hi = seg.length - 1, ans = -1;
-    while (lo <= hi) { const mid = (lo + hi) >> 1; if (seg[mid].start_ms <= ms) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+    let lo = 0, hi = segments.length - 1, ans = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (segments[mid].start_ms <= ms) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
     return ans;
   };
   // Scroll inside the transcript panel only: scrollIntoView would also move the whole page.
@@ -167,24 +163,34 @@ export async function renderRecording(root, id, params) {
     if (audio) {
       audio.currentTime = sec;
       if (play) audio.play().catch(() => {});
-      paint();
+      paint(); // also syncs transcript + notes
     } else {
       syncUI(sec);
     }
-    syncUI(sec);
     if (!audio) { const el = panel.querySelector(`[data-seg="${findSeg(sec * 1000)}"]`); if (el) reveal(el, true); }
   };
 
   // ── Player ───────────────────────────────────────────────
   let raf = 0;
+  const ui = audio ? {
+    fill: root.querySelector('#fill'), thumb: root.querySelector('#thumb'),
+    cur: root.querySelector('#cur'), scrub: root.querySelector('#scrub'), lastSec: -1, lastPct: -1,
+  } : null;
   function paint() {
-    if (!audio) return;
+    if (!ui) return;
     const t = audio.currentTime || 0;
     const pct = totalSec ? Math.min(100, (t / totalSec) * 100) : 0;
-    root.querySelector('#fill').style.width = `${pct}%`;
-    root.querySelector('#thumb').style.left = `${pct}%`;
-    root.querySelector('#cur').textContent = clock(t);
-    root.querySelector('#scrub').setAttribute('aria-valuenow', String(Math.round(t)));
+    if (Math.abs(pct - ui.lastPct) >= 0.05) {
+      ui.fill.style.width = `${pct}%`;
+      ui.thumb.style.left = `${pct}%`;
+      ui.lastPct = pct;
+    }
+    const sec = Math.floor(t);
+    if (sec !== ui.lastSec) {
+      ui.cur.textContent = clock(t);
+      ui.scrub.setAttribute('aria-valuenow', String(sec));
+      ui.lastSec = sec;
+    }
     syncUI(t);
   }
   if (audio) {
@@ -246,7 +252,7 @@ export async function renderRecording(root, id, params) {
   }
 
   function keys(e) {
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (isTyping() || e.ctrlKey || e.metaKey || e.altKey) return;
     if (!audio) return;
     if (e.key === ' ' && !document.activeElement?.closest('button, [role="slider"]')) { e.preventDefault(); audio.paused ? audio.play().catch(() => {}) : audio.pause(); }
     else if (e.key === 'ArrowRight' && !document.activeElement?.closest('[role="slider"]')) seekTo(audio.currentTime + 5, { play: false });
@@ -266,9 +272,12 @@ export async function renderRecording(root, id, params) {
 
   // ── Tabs ─────────────────────────────────────────────────
   const counts = () => {
-    root.querySelector('#n-alerts').textContent = alerts.filter((a) => !a.dismissed).length ? ` ${alerts.filter((a) => !a.dismissed).length}` : '';
+    const live = alerts.filter((a) => !a.dismissed).length;
+    root.querySelector('#n-alerts').textContent = live ? ` ${live}` : '';
     root.querySelector('#n-cards').textContent = flashcards.length ? ` ${flashcards.length}` : '';
   };
+
+  const folded = segments.map((x) => fold(x.text)); // computed once, reused by every filter keystroke
 
   const drawTab = () => {
     counts();
@@ -280,20 +289,27 @@ export async function renderRecording(root, id, params) {
           <input class="input" id="seg-filter" type="search" placeholder="Buscar en esta clase…" style="flex:1;padding:6px 10px">
           <label class="follow"><input type="checkbox" id="follow" checked> Seguir</label>
         </div>
-        <div id="segs">${segments.length ? seg.map((s) => html`
-          <button class="seg ${s.doubtful ? 'doubtful' : ''}" type="button" data-seg="${s.i}" data-t="${s.start_ms}" title="${s.doubtful ? 'Reconocimiento dudoso: escucha el audio' : ''}">
+        <div id="segs">${segments.length ? segments.map((s, i) => html`
+          <button class="seg ${s.doubtful ? 'doubtful' : ''}" type="button" data-seg="${i}" data-t="${s.start_ms}" title="${s.doubtful ? 'Reconocimiento dudoso: escucha el audio' : ''}">
             <span class="t">${msClock(s.start_ms)}</span><span class="x">${s.text}</span></button>`)
           : html`<p class="sub" style="padding:12px">Sin transcripción.</p>`}</div>`);
       panel.querySelector('#follow').onchange = (e) => { follow = e.target.checked; };
+      let filterTimer;
       panel.querySelector('#seg-filter').oninput = (e) => {
-        const q = fold(e.target.value.trim());
+        clearTimeout(filterTimer);
+        const value = e.target.value;
+        filterTimer = setTimeout(() => applyFilter(value), 120);
+      };
+      const applyFilter = (value) => {
+        const q = fold(value.trim());
         panel.querySelectorAll('.seg').forEach((el) => {
-          const text = segments[Number(el.dataset.seg)].text;
-          const match = !q || fold(text).includes(q);
+          const idx = Number(el.dataset.seg);
+          const text = segments[idx].text;
+          const match = !q || folded[idx].includes(q);
           el.hidden = !match;
           const x = el.querySelector('.x');
           if (match && q) {
-            const i = fold(text).indexOf(q);
+            const i = folded[idx].indexOf(q);
             x.innerHTML = `${esc(text.slice(0, i))}<mark>${esc(text.slice(i, i + q.length))}</mark>${esc(text.slice(i + q.length))}`;
           } else x.textContent = text;
         });
@@ -301,26 +317,7 @@ export async function renderRecording(root, id, params) {
       curSeg = -1;
       if (audio) syncUI(audio.currentTime || 0);
     } else if (tab === 'alerts') {
-      const live = alerts;
-      mount(panel, live.length ? html`${live.map((a) => html`
-        <div class="alert ${a.dismissed ? 'is-done' : ''}" data-aid="${a.id}">
-          <div class="body">
-            <div class="chip-row">${kindChip(a.kind)}
-              ${a.due_date ? html`<span class="badge">📅 ${fmtDate(a.due_date)} · ${relativeDay(a.due_date)}</span>` : ''}
-              ${a.confirmed ? html`<span class="tick">✓ Confirmado</span>` : a.confidence === 'low' ? html`<span class="conf-low">⚠ Dudoso: verifica con el audio</span>` : ''}
-              ${a.dismissed ? html`<span class="sub">Descartado</span>` : ''}</div>
-            <div class="txt">${a.text}</div>
-            ${a.quote ? html`<q>${a.quote}</q>` : ''}
-            <div class="acts">
-              <button class="btn sm" data-act="listen" type="button">▶ ${msClock(a.t_ms)}</button>
-              ${a.dismissed ? html`<button class="btn sm" data-act="restore" type="button">Restaurar</button>`
-                : html`<button class="btn sm" data-act="confirm" type="button">${a.confirmed ? '↩ Quitar confirmación' : '✓ Confirmar'}</button>
-                       <button class="btn sm ghost" data-act="dismiss" type="button">✕ Descartar</button>`}
-              <label class="sr-only" for="d${a.id}">Fecha</label>
-              <input class="input" id="d${a.id}" data-act="date" type="date" value="${a.due_date || ''}" style="padding:4px 8px;font-size:13px">
-            </div>
-          </div>
-        </div>`)}`
+      mount(panel, alerts.length ? html`${alerts.map((a) => alertCard(a, { withSource: false, inline: true }))}`
         : html`<p class="sub" style="padding:14px">Sin avisos. ${ai ? 'Procesa la clase con IA para detectar exámenes, entregas y advertencias.' : ''}</p>`);
     } else if (tab === 'cards') {
       mount(panel, flashcards.length ? html`
@@ -344,33 +341,13 @@ export async function renderRecording(root, id, params) {
     const b = e.target.closest('.tab');
     if (b) { tab = b.dataset.tab; drawTab(); }
   });
-  panel.addEventListener('click', async (e) => {
+  panel.addEventListener('click', (e) => {
     const segBtn = e.target.closest('.seg');
     if (segBtn) return seekTo(Number(segBtn.dataset.t) / 1000);
     const listen = e.target.closest('[data-listen]');
     if (listen) return seekTo(Number(listen.dataset.listen) / 1000);
-    const act = e.target.closest('[data-act]');
-    const card = e.target.closest('[data-aid]');
-    if (!act || !card || act.dataset.act === 'date') return;
-    const a = alerts.find((x) => x.id === Number(card.dataset.aid));
-    if (act.dataset.act === 'listen') return seekTo(Math.max(0, a.t_ms / 1000 - 3));
-    const patch = { confirm: { confirmed: !a.confirmed }, dismiss: { dismissed: true }, restore: { dismissed: false } }[act.dataset.act];
-    try {
-      const { alert } = await api(`/api/alerts/${a.id}`, { method: 'PATCH', body: patch });
-      Object.assign(a, alert);
-      drawTab(); refreshMeta().catch(() => {});
-    } catch (err) { toast(err.message, 'err'); }
   });
-  panel.addEventListener('change', async (e) => {
-    if (e.target.dataset.act !== 'date') return;
-    const a = alerts.find((x) => x.id === Number(e.target.closest('[data-aid]').dataset.aid));
-    try {
-      const { alert } = await api(`/api/alerts/${a.id}`, { method: 'PATCH', body: { due_date: e.target.value || null, confirmed: !!e.target.value } });
-      Object.assign(a, alert);
-      toast('Fecha actualizada y confirmada');
-      drawTab();
-    } catch (err) { toast(err.message, 'err'); }
-  });
+  bindAlertActions(panel, alerts, () => { drawTab(); refreshMeta().catch(() => {}); }, (a) => seekTo(Math.max(0, a.t_ms / 1000 - 3)));
   drawTab();
 
   // ── Header actions ───────────────────────────────────────

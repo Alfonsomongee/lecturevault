@@ -7,6 +7,8 @@
  * All math is on calendar dates (UTC midnight) so time zones and DST can't shift a day.
  */
 
+import { fold } from '../utils/text.js';
+
 const MONTHS: Record<string, number> = {
   enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7,
   agosto: 8, septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12,
@@ -62,10 +64,6 @@ export function addDays(date: CalendarDate, days: number): CalendarDate {
 export function weekdayName(date: CalendarDate): string {
   const names = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
   return names[new Date(toUtc(date)).getUTCDay()]!;
-}
-
-function fold(text: string): string {
-  return text.normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase();
 }
 
 export interface ResolvedDate {

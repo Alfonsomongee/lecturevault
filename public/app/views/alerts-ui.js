@@ -1,7 +1,11 @@
 // Shared alert card + actions (used by the agenda).
 import { api, html, kindChip, msClock, fmtDate, relativeDay, toast } from '../util.js';
 
-export function alertCard(a, { withSource = true } = {}) {
+/**
+ * `inline` is for pages that already host the player: "listen" becomes a button the page handles
+ * (a link would change the route and re-render the player).
+ */
+export function alertCard(a, { withSource = true, inline = false } = {}) {
   return html`<div class="alert ${a.dismissed ? 'is-done' : ''}" data-aid="${a.id}" id="alert-${a.id}">
     <div class="body">
       <div class="chip-row">${kindChip(a.kind)}
@@ -12,7 +16,8 @@ export function alertCard(a, { withSource = true } = {}) {
       ${a.quote ? html`<q>${a.quote}</q>` : ''}
       ${withSource ? html`<div class="sub" style="margin-top:4px">${a.course ? `${a.course} · ` : ''}${a.recording_title || ''}</div>` : ''}
       <div class="acts">
-        <a class="btn sm" href="#/r/${a.recording_id}?t=${Math.max(0, Math.floor(a.t_ms / 1000) - 3)}">▶ Escuchar ${msClock(a.t_ms)}</a>
+        ${inline ? html`<button class="btn sm" data-act="listen" type="button">▶ ${msClock(a.t_ms)}</button>`
+          : html`<a class="btn sm" href="#/r/${a.recording_id}?t=${Math.max(0, Math.floor(a.t_ms / 1000) - 3)}">▶ Escuchar ${msClock(a.t_ms)}</a>`}
         ${a.dismissed ? html`<button class="btn sm" data-act="restore" type="button">Restaurar</button>`
           : html`<button class="btn sm" data-act="confirm" type="button">${a.confirmed ? '↩ Quitar confirmación' : '✓ Confirmar'}</button>
                  <button class="btn sm ghost" data-act="dismiss" type="button">✕ Descartar</button>`}
@@ -24,13 +29,14 @@ export function alertCard(a, { withSource = true } = {}) {
 }
 
 /** Wire confirm / dismiss / restore / date edits on a container. `onChange` re-renders. */
-export function bindAlertActions(container, alerts, onChange) {
+export function bindAlertActions(container, alerts, onChange, onListen) {
   const find = (el) => alerts.find((x) => x.id === Number(el.closest('[data-aid]')?.dataset.aid));
   container.addEventListener('click', async (e) => {
     const act = e.target.closest('button[data-act]');
     if (!act) return;
     const a = find(act);
     if (!a) return;
+    if (act.dataset.act === 'listen') { onListen?.(a); return; }
     const patch = { confirm: { confirmed: !a.confirmed }, dismiss: { dismissed: true }, restore: { dismissed: false } }[act.dataset.act];
     try {
       Object.assign(a, (await api(`/api/alerts/${a.id}`, { method: 'PATCH', body: patch })).alert);

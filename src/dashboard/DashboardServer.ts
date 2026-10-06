@@ -243,8 +243,13 @@ export class DashboardServer {
       res.json({ ...this.db.getStats(), ...this.study.getStudyStats() });
     }));
 
-    api.get('/courses', this.wrap((_req, res) => {
-      res.json({ courses: this.db.getCourses() });
+    // Light sidebar/nav data (the SPA polls this; the full library list is only fetched by the library view)
+    api.get('/meta', this.wrap((_req, res) => {
+      res.json({
+        stats: { ...this.db.getStats(), ...this.study.getStudyStats() },
+        courses: this.db.getCourses(),
+        ai: this.client.hasKey,
+      });
     }));
 
     api.get('/recordings/:id', this.wrap((req, res) => {
@@ -347,7 +352,7 @@ export class DashboardServer {
 
     // Alerts + calendar
     api.get('/alerts', this.wrap((req, res) => {
-      res.json({ alerts: this.study.listAlerts({ course: this.course(req.query['course']), includeDismissed: true }) });
+      res.json({ alerts: this.study.listAlerts({ course: this.course(req.query['course']), includeDismissed: req.query['dismissed'] !== '0' }) });
     }));
 
     api.patch('/alerts/:id', this.wrap((req, res) => {
@@ -402,10 +407,6 @@ export class DashboardServer {
         .type('text/tab-separated-values; charset=utf-8')
         .set('Content-Disposition', `attachment; filename="lecturevault-anki-${kind}.txt"`)
         .send(buildAnkiTsv(cards, kind));
-    }));
-
-    api.get('/glossary', this.wrap((req, res) => {
-      res.json({ glossary: this.study.listGlossary(this.course(req.query['course'])) });
     }));
 
     api.use((_req, res) => {

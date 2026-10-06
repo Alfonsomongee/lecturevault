@@ -22,6 +22,17 @@ export function contentTokens(text: string): string[] {
   return [...out];
 }
 
+// Alerts and flashcards are all located against the same transcript: tokenise it once, not per call
+const tokenCache = new WeakMap<TranscriptSegment[], Set<string>[]>();
+function segmentTokens(segments: TranscriptSegment[]): Set<string>[] {
+  let cached = tokenCache.get(segments);
+  if (!cached) {
+    cached = segments.map((s) => new Set(contentTokens(s.text)));
+    tokenCache.set(segments, cached);
+  }
+  return cached;
+}
+
 export interface Location {
   /** Fraction of the evidence's content words found in the best window (0-1) */
   score: number;
@@ -37,7 +48,7 @@ export function locateEvidence(evidence: string, segments: TranscriptSegment[], 
   const wanted = contentTokens(evidence);
   if (wanted.length < 2 || segments.length === 0) return { score: 0, startMs: hintMs };
 
-  const segTokens = segments.map((s) => new Set(contentTokens(s.text)));
+  const segTokens = segmentTokens(segments);
   const WINDOW = 3;
   let best: (Location & { size: number; distance: number }) | null = null;
 

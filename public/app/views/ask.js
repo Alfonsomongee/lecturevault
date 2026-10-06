@@ -1,5 +1,5 @@
 // Ask your classes: RAG answers with verified, clickable citations.
-import { api, html, raw, mount, esc, renderMarkdown, msClock, toast, store, courseLabel } from '../util.js';
+import { api, html, mount, renderMarkdown, msClock, toast, courseLabel } from '../util.js';
 import { state } from '../main.js';
 
 const history = [];
@@ -85,5 +85,4 @@ export async function renderAsk(root, params) {
   const q = params.get('q');
   if (q && history[history.length - 2]?.q !== q) ask(q);
   else input.focus();
-  void raw; void esc; void store;
 }

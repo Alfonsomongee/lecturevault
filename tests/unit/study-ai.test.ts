@@ -252,6 +252,13 @@ describe('exporters', () => {
     expect(ics).not.toMatch(/[^\r]\n/);
   });
 
+  it('neutralises lone carriage returns so text cannot inject ICS properties or Anki rows', () => {
+    const ics = buildIcs([{ id: 1, recording_id: 1, kind: 'warning', text: 'Aviso\rATTENDEE:evil', quote: '', t_ms: 0, due_date: '2026-03-31', date_text: '', confidence: 'low', confirmed: 0, dismissed: 0, created_at: '' } as AlertRow]);
+    expect(ics.split('\r\n').some((l) => l.startsWith('ATTENDEE'))).toBe(false);
+    const tsv = buildAnkiTsv([{ id: 1, recording_id: 1, kind: 'basic', front: 'a\rb', back: 'c', tag: '', t_ms: 0, guid: 'g', box: 0, reps: 0, due_at: '' } as FlashcardRow], 'basic');
+    expect(tsv.trim().split('\n')).toHaveLength(7);
+  });
+
   it('folds long lines on octet boundaries without splitting characters', () => {
     const folded = foldIcsLine('SUMMARY:' + 'ñ'.repeat(120));
     const parts = folded.split('\r\n ');

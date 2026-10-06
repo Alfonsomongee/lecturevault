@@ -1,14 +1,17 @@
 // Study: spaced-repetition review (Leitner boxes) with cloze support and Anki export.
-import { api, html, raw, mount, richText, msClock, toast } from '../util.js';
+import { api, html, mount, richText, msClock, toast, isTyping } from '../util.js';
 import { state, refreshMeta, onLeave } from '../main.js';
 
 const BOX_LABELS = ['Hoy', '1 día', '3 días', '7 días', '21 días'];
 let practice = false;
+let renderToken = 0; // a newer render supersedes slower, older ones (fast clicks on the mode button)
 let activeKeys = null; // renderStudy re-runs when toggling practice mode: never stack key handlers
 
 export async function renderStudy(root) {
+  const token = ++renderToken;
   const qs = (extra = '') => `?${state.course ? `course=${encodeURIComponent(state.course)}&` : ''}${extra}`;
   const [dueData, allData] = await Promise.all([api(`/api/flashcards${qs('due=1')}`), api(`/api/flashcards${qs()}`)]);
+  if (token !== renderToken) return; // superseded while fetching
   const all = allData.flashcards;
   let queue = practice ? [...all].sort(() => Math.random() - 0.5) : dueData.flashcards;
   let i = 0, revealed = false, right = 0, wrong = 0;
@@ -88,7 +91,7 @@ export async function renderStudy(root) {
   };
 
   const keys = (e) => {
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || e.ctrlKey || e.metaKey) return;
+    if (isTyping() || e.ctrlKey || e.metaKey) return;
     if (i >= queue.length) return;
     if ((e.key === ' ' || e.key === 'Enter') && !revealed) { e.preventDefault(); revealed = true; draw(); }
     else if (revealed && e.key === '1') answer(false);
@@ -99,5 +102,4 @@ export async function renderStudy(root) {
   addEventListener('keydown', keys);
   onLeave(() => { removeEventListener('keydown', keys); if (activeKeys === keys) activeKeys = null; });
   draw();
-  void raw;
 }

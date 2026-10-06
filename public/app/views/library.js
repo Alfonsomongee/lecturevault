@@ -1,6 +1,6 @@
 // Library: KPI tiles, what's next, and recordings grouped by course.
-import { api, html, mount, duration, fmtDate, courseColor, courseLabel, daysUntil, relativeDay, kindChip, toast, esc } from '../util.js';
-import { state, refreshMeta, renderRoute, go } from '../main.js';
+import { api, html, mount, duration, fmtDate, courseColor, courseLabel, daysUntil, relativeDay, kindChip, toast } from '../util.js';
+import { state, applyMeta, refreshMeta, renderRoute, setCourse } from '../main.js';
 
 let filter = 'all';
 
@@ -30,7 +30,7 @@ function row(r) {
     <td style="text-align:right;white-space:nowrap">
       ${open ? html`<a class="btn sm" href="#/r/${r.id}">Abrir</a>` : ''}
       ${open && !r.has_notes && state.ai ? html`<button class="btn sm primary" data-process="${r.id}">✨ Generar con IA</button>` : ''}
-      ${r.playback_url ? html`<a class="btn sm ghost" href="${r.playback_url}" target="_blank" rel="noopener noreferrer" title="Abrir en Collaborate">↗</a>` : ''}
+      ${/^https?:\/\//i.test(r.playback_url || '') ? html`<a class="btn sm ghost" href="${r.playback_url}" target="_blank" rel="noopener noreferrer" title="Abrir en Collaborate">↗</a>` : ''}
     </td>
   </tr>`;
 }
@@ -41,9 +41,9 @@ export async function renderLibrary(root) {
   if (state.course) q.set('course', state.course);
   const [data, alertsData] = await Promise.all([
     api(`/api/recordings${q.size ? `?${q}` : ''}`),
-    api(`/api/alerts${state.course ? `?course=${encodeURIComponent(state.course)}` : ''}`),
+    api(`/api/alerts?dismissed=0${state.course ? `&course=${encodeURIComponent(state.course)}` : ''}`),
   ]);
-  state.courses = data.courses; state.stats = data.stats; state.ai = data.ai;
+  applyMeta(data);
   const rs = data.recordings;
   const s = data.stats;
 
@@ -63,7 +63,7 @@ export async function renderLibrary(root) {
       <div><div class="eyebrow">Tu campus personal</div><h1>Biblioteca</h1>
         <p>Todas tus clases capturadas, con apuntes, avisos y tarjetas listos para estudiar.</p></div>
       <div class="chip-row">
-        <button class="btn" id="ingest-btn" type="button" title="Importar las transcripciones de data/transcripts">📥 Importar transcripciones</button>
+        <button class="btn" data-ingest type="button" title="Importar las transcripciones de data/transcripts">📥 Importar transcripciones</button>
       </div>
     </div>
 
@@ -108,7 +108,7 @@ export async function renderLibrary(root) {
     ${rs.length === 0 ? html`
       <div class="card empty-state"><div class="icon">📭</div><h2>No hay grabaciones</h2>
         <p>Sincroniza tus clases con <code>npm run sync</code>, captura una con <code>npm run capture:and:transcribe</code>, o ve cómo funciona todo con <code>npm run demo</code>.</p>
-        <button class="btn primary" id="ingest-btn-2" type="button">📥 Importar transcripciones existentes</button></div>`
+        <button class="btn primary" data-ingest type="button">📥 Importar transcripciones existentes</button></div>`
     : [...groups.entries()].map(([course, items]) => {
         const info = state.courses.find((c) => c.course === course) || { count: items.length, totalSeconds: 0 };
         const done = items.filter((r) => r.has_notes).length;
@@ -135,9 +135,8 @@ export async function renderLibrary(root) {
       await refreshMeta(); await renderRoute();
     } catch (err) { toast(err.message, 'err'); btn.disabled = false; }
   };
-  root.querySelector('#ingest-btn')?.addEventListener('click', (e) => doIngest(e.currentTarget));
-  root.querySelector('#ingest-btn-2')?.addEventListener('click', (e) => doIngest(e.currentTarget));
-  root.querySelector('[data-clear-course]')?.addEventListener('click', () => import('../main.js').then((m) => m.setCourse('')));
+  root.querySelectorAll('[data-ingest]').forEach((b) => b.addEventListener('click', () => doIngest(b)));
+  root.querySelector('[data-clear-course]')?.addEventListener('click', () => setCourse(''));
   root.querySelectorAll('.filter-btn').forEach((b) => b.addEventListener('click', () => { filter = b.dataset.filter; renderRoute(); }));
   root.querySelectorAll('[data-process]').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true; b.textContent = '⏳ Procesando…';
@@ -147,5 +146,4 @@ export async function renderLibrary(root) {
       await refreshMeta(); await renderRoute();
     } catch (err) { toast(err.message, 'err'); b.disabled = false; b.textContent = '✨ Generar con IA'; }
   }));
-  void go; void esc;
 }

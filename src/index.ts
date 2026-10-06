@@ -30,7 +30,8 @@ import {
   runIngest, runStudy, runSearch, runAsk, runExport, runOptimizeAudio, runDemo,
   finalizeTranscript, printReport,
 } from './cli/study-commands.js';
-import { StudyPipeline } from './study/StudyPipeline.js';
+import { StudyRepository } from './database/StudyRepository.js';
+import { formatClock } from './utils/time.js';
 import { TranscriptIngestor } from './library/TranscriptIngestor.js';
 import type { SyncResult, RecordingRow, RecordingStatus } from './types.js';
 
@@ -525,18 +526,6 @@ async function runInspectPlayer(
   }
 }
 
-/** Helper to format seconds as hh:mm:ss or mm:ss */
-function formatTime(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const hrs = Math.floor(s / 3600);
-  const mins = Math.floor((s % 3600) / 60);
-  const secs = s % 60;
-  if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-}
-
 /** Helper to render a terminal progress bar */
 function renderBar(pct: number, width: number = 20): string {
   const filled = Math.min(width, Math.max(0, Math.round((pct / 100) * width)));
@@ -743,11 +732,11 @@ async function runCaptureAndTranscribe(
       const progress = await captureManager.getPlaybackProgress(hook.frame).catch(() => null);
 
       if (progress && progress.hasMedia) {
-        const curStr = formatTime(progress.currentTime);
-        const durStr = progress.duration > 0 ? formatTime(progress.duration) : '--:--';
+        const curStr = formatClock(progress.currentTime);
+        const durStr = progress.duration > 0 ? formatClock(progress.duration) : '--:--';
         const remainingRealSecs = (progress.duration - progress.currentTime) / (speed > 0 ? speed : 1.0);
         const remainingStr = progress.duration > progress.currentTime
-          ? formatTime(remainingRealSecs)
+          ? formatClock(remainingRealSecs)
           : '00:00';
         const status = progress.isPaused ? '⏸️ En pausa' : '▶️ Grabando';
         const speedTag = speed !== 1.0 ? ` (${speed}x)` : '';
@@ -785,7 +774,7 @@ async function runCaptureAndTranscribe(
     if (manualStopRequested) {
       const p = await captureManager.getPlaybackProgress(hook.frame).catch(() => null);
       if (p && p.duration > 0 && p.currentTime < p.duration - 5) {
-        console.log(`\n⚠️ Aviso: Has detenido la grabación antes de que terminara el vídeo (${formatTime(p.currentTime)} de ${formatTime(p.duration)}).`);
+        console.log(`\n⚠️ Aviso: Has detenido la grabación antes de que terminara el vídeo (${formatClock(p.currentTime)} de ${formatClock(p.duration)}).`);
       } else {
         console.log('\n🛑 Detención manual confirmada.');
       }
@@ -1127,11 +1116,11 @@ Ejemplos:
           const progress = await captureManager.getPlaybackProgress(hook.frame).catch(() => null);
 
           if (progress && progress.hasMedia) {
-            const curStr = formatTime(progress.currentTime);
-            const durStr = progress.duration > 0 ? formatTime(progress.duration) : '--:--';
+            const curStr = formatClock(progress.currentTime);
+            const durStr = progress.duration > 0 ? formatClock(progress.duration) : '--:--';
             const remainingRealSecs = (progress.duration - progress.currentTime) / (speed > 0 ? speed : 1.0);
             const remainingStr = progress.duration > progress.currentTime
-              ? formatTime(remainingRealSecs)
+              ? formatClock(remainingRealSecs)
               : '00:00';
             const statusStr = progress.isPaused ? '⏸️ En pausa' : '▶️ Grabando';
             const speedTag = speed !== 1.0 ? ` (${speed}x)` : '';
@@ -1164,7 +1153,7 @@ Ejemplos:
         // Transcribir con faster-whisper
         console.log(`  🚀 Transcribiendo con faster-whisper (${model})...`);
         // Los términos de clases anteriores de la asignatura sesgan a Whisper hacia el vocabulario correcto
-        const hotwords = new StudyPipeline(db, { dataDir: config.dataDir }, batchLogger).courseTerms(rec.course);
+        const hotwords = new StudyRepository(db.handle).courseTerms(rec.course);
         await runTranscriptionCli({
           inputFile: captureRes.wavPath,
           model,

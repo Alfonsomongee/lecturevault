@@ -187,9 +187,13 @@ test.describe('Search, agenda, study, ask', () => {
 
   test('toggling practice mode does not stack keyboard handlers (regression)', async ({ page }) => {
     await page.goto(`${demo.url}/#/study`);
+    // wait for each re-render to land, so the keys below hit the final state
     await page.locator('#mode').click();
+    await expect(page.locator('#mode')).toContainText('Volver al repaso');
     await page.locator('#mode').click();
+    await expect(page.locator('#mode')).toContainText('Practicar todas');
     await page.locator('#mode').click();
+    await expect(page.locator('#mode')).toContainText('Volver al repaso');
     await expect(page.locator('.flash-progress')).toContainText('1 /');
     await page.keyboard.press('Space');
     await page.keyboard.press('2');
