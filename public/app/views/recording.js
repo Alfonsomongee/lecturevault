@@ -18,7 +18,8 @@ export async function renderRecording(root, id, params) {
   let tab = 'transcript';
   let follow = true;
 
-  const courseOptions = state.courses.filter((c) => c.course).map((c) => html`<option value="${c.course}"></option>`);
+  const courseNames = [...new Set([...state.catalog.map((c) => c.label), ...state.courses.map((c) => c.course).filter(Boolean)])];
+  const courseOptions = courseNames.map((c) => html`<option value="${c}"></option>`);
 
   mount(root, html`
     <div class="rec-head">

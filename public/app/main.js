@@ -9,6 +9,7 @@ import { renderAsk } from './views/ask.js';
 
 export const state = {
   courses: [],
+  catalog: [],
   stats: {},
   ai: false,
   course: store.get('lv-course') || '',
@@ -24,9 +25,10 @@ export function setCourse(course) {
 /** Single place where sidebar/nav data is updated (the library view feeds it from its own fetch). */
 export function applyMeta(data) {
   state.courses = data.courses || [];
+  state.catalog = data.catalog || [];
   state.stats = data.stats || {};
   state.ai = !!data.ai;
-  if (state.course && !state.courses.some((c) => (c.course || NO_COURSE) === state.course)) state.course = '';
+  if (state.course && state.course !== NO_COURSE && !state.courses.some((c) => c.course === state.course) && !state.catalog.some((c) => c.label === state.course)) state.course = '';
   drawChrome();
 }
 
@@ -82,13 +84,21 @@ function drawNav(active) {
 }
 function drawChrome() {
   drawNav(parseHash().parts[0] || '');
-  const total = state.courses.reduce((a, c) => a + c.count, 0);
+  const total = state.courses.reduce((n, c) => n + c.count, 0);
+  const counts = new Map(state.courses.map((c) => [c.course, c.count]));
+  // Catalog subjects always show (even with 0 classes), then any other course, then "unassigned"
+  const known = new Set(state.catalog.map((c) => c.label));
+  const entries = [
+    ...state.catalog.map((c) => ({ value: c.label, label: c.label, n: counts.get(c.label) || 0 })),
+    ...state.courses.filter((c) => c.course && !known.has(c.course)).map((c) => ({ value: c.course, label: c.course, n: c.count })),
+    ...(counts.get('') ? [{ value: NO_COURSE, label: courseLabel(''), n: counts.get('') }] : []),
+  ];
   mount(document.getElementById('side-courses'), html`
     <button class="course-link" type="button" data-course="" aria-pressed="${state.course === ''}">
       <span class="dot" style="background:var(--muted)"></span>Todas<small>${total}</small></button>
-    ${state.courses.map((c) => html`
-      <button class="course-link" type="button" data-course="${c.course || NO_COURSE}" aria-pressed="${state.course === (c.course || NO_COURSE)}">
-        <span class="dot" style="background:${courseColor(state.courses, c.course)}"></span>${courseLabel(c.course)}<small>${c.count}</small></button>`)}`);
+    ${entries.map((e) => html`
+      <button class="course-link" type="button" data-course="${e.value}" aria-pressed="${state.course === e.value}" title="${e.label}">
+        <span class="dot" style="background:${courseColor(state.courses, e.value === NO_COURSE ? '' : e.value)}"></span><span class="clip">${e.label}</span><small>${e.n}</small></button>`)}`);
   mount(document.getElementById('side-foot'), html`
     <div class="ai-state ${state.ai ? 'on' : ''}"><i></i>${state.ai ? 'IA de Gemini activa' : 'IA desactivada'}</div>
     ${state.ai ? '' : html`<span>Añade <code>GEMINI_API_KEY</code> a <code>.env</code> para generar apuntes, avisos y tarjetas.</span>`}

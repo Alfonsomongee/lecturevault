@@ -28,10 +28,11 @@ import { AudioCaptureManager } from './capture/AudioCaptureManager.js';
 import { runTranscriptionCli } from './transcriber/transcribe-cli.js';
 import {
   runIngest, runStudy, runSearch, runAsk, runExport, runOptimizeAudio, runDemo,
-  finalizeTranscript, printReport,
+  finalizeTranscript, printReport, runCourses, withDetectedCourses,
 } from './cli/study-commands.js';
 import { StudyRepository } from './database/StudyRepository.js';
 import { formatClock } from './utils/time.js';
+import { CourseCatalog, courseLabel } from './library/courses.js';
 import { TranscriptIngestor } from './library/TranscriptIngestor.js';
 import type { SyncResult, RecordingRow, RecordingStatus } from './types.js';
 
@@ -186,7 +187,7 @@ async function runManualAcceptance(
 
     // Database upsert
     if (extraction.recordings.length > 0) {
-      const { newCount, updatedCount } = db.upsertMany(extraction.recordings);
+      const { newCount, updatedCount } = db.upsertMany(withDetectedCourses(config, extraction.recordings));
       result.newRecordings = newCount;
       result.updatedRecordings = updatedCount;
 
@@ -334,7 +335,7 @@ async function runSync(config: ReturnType<typeof loadConfig>, logger: ReturnType
     );
 
     if (extraction.recordings.length > 0) {
-      const { newCount, updatedCount } = db.upsertMany(extraction.recordings);
+      const { newCount, updatedCount } = db.upsertMany(withDetectedCourses(config, extraction.recordings));
       result.newRecordings = newCount;
       result.updatedRecordings = updatedCount;
       syncLogger.info({ newCount, updatedCount }, 'Database updated');
@@ -942,7 +943,9 @@ Ejemplos:
   // Filter by course / title
   if (courseFilter.trim()) {
     const cf = courseFilter.toLowerCase().trim();
-    queue = queue.filter(r => r.title.toLowerCase().includes(cf) || r.collab_id.toLowerCase().includes(cf));
+    const wanted = CourseCatalog.load(config.dataDir).find(courseFilter);
+    queue = queue.filter(r =>
+      (wanted && r.course === courseLabel(wanted)) || r.title.toLowerCase().includes(cf) || r.collab_id.toLowerCase().includes(cf));
   }
 
   // Filter by from / to
@@ -1019,6 +1022,10 @@ Ejemplos:
 
     for (let i = 0; i < queue.length; i++) {
       const rec = queue[i]!;
+      if (!rec.course) {
+        const detected = CourseCatalog.load(config.dataDir).detect(`${rec.title} ${rec.playback_url}`);
+        if (detected) { db.setCourse(rec.id, detected); rec.course = detected; }
+      }
       console.log(`\n===============================================================`);
       console.log(`▶️ [${i + 1}/${queue.length}] PROCESANDO: "${rec.title}"`);
       console.log(`• ID:       ${rec.collab_id}`);
@@ -1219,6 +1226,11 @@ async function main(): Promise<void> {
       break;
     }
 
+    case 'courses': {
+      await runCourses(config, logger);
+      break;
+    }
+
     case 'ingest': {
       await runIngest(config, logger);
       break;
@@ -1305,7 +1317,7 @@ async function main(): Promise<void> {
     }
 
     default:
-      logger.error({ command }, 'Unknown command. Use: batch-transcribe, capture-and-transcribe, capture-audio, inspect-player, accept-manual, sync, serve, sync-and-serve, ingest, study, search, ask, export, optimize-audio or demo');
+      logger.error({ command }, 'Unknown command. Use: batch-transcribe, capture-and-transcribe, capture-audio, inspect-player, accept-manual, sync, serve, sync-and-serve, courses, ingest, study, search, ask, export, optimize-audio or demo');
       process.exit(1);
   }
 }

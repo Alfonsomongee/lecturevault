@@ -18,6 +18,7 @@
     "transcribe:test": "tsx src/transcriber/transcribe-cli.ts",
     "refine:transcript": "tsx src/ai/refine-cli.ts",
     "ingest": "tsx src/index.ts ingest",
+    "courses": "tsx src/index.ts courses",
     "study": "tsx src/index.ts study",
     "search": "tsx src/index.ts search",
     "ask": "tsx src/index.ts ask",

@@ -1,0 +1,12 @@
+[
+  { "code": "01MUIN", "name": "Gestión de Empresas e Ingeniería de Organización", "teacher": "Maria M Cardinale Villarreal", "lmsId": "2026_10_A_51176" },
+  { "code": "02MUIN", "name": "Ingeniería mecánica y diseño de máquinas", "teacher": "Mary Josefina Vergara", "lmsId": "2026_10_A_51177" },
+  { "code": "03MUIN", "name": "Sistemas eléctricos y de producción de energía", "teacher": "Rami David Orejon Sanchez", "lmsId": "2026_10_A_51178" },
+  { "code": "04MUIN", "name": "Tecnología electrónica e instrumentación", "teacher": "David Ruiz Muñoz", "lmsId": "2026_10_A_51179" },
+  { "code": "05MUIN", "name": "Sistemas de automatización y control", "teacher": "Ernesto Arturo Martínez Rams", "lmsId": "2026_10_A_51180" },
+  { "code": "06MUIN", "name": "Sistemas integrados de fabricación", "teacher": "Henry Espinoza Bejarano", "lmsId": "2026_10_A_51181" },
+  { "code": "07MUIN", "name": "Procesos químicos en la industria", "teacher": "Borja Garrido Arias", "lmsId": "2026_10_A_51182" },
+  { "code": "08MUIN", "name": "Ingeniería térmica y de fluidos", "teacher": "Nasser Khodor", "lmsId": "2026_10_A_51183" },
+  { "code": "09MUIN", "name": "Construcción y Arquitectura Industrial", "teacher": "Pablo Moreno Muñoz" },
+  { "code": "10MUIN", "name": "Instalaciones industriales I", "teacher": "Rami David Orejon Sanchez" }
+]

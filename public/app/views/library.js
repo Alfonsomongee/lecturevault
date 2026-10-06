@@ -19,6 +19,7 @@ function badges(r) {
 function row(r) {
   const open = r.segment_count > 0;
   return html`<tr>
+    <td class="sel"><input type="checkbox" data-sel="${r.id}" aria-label="Seleccionar ${r.title}"></td>
     <td class="title-cell">
       ${open ? html`<a href="#/r/${r.id}">${r.title}</a>` : html`<span>${r.title}</span>`}
       <div class="sub">${open ? `${r.segment_count} segmentos transcritos` : 'Aún sin transcripción'}</div>
@@ -97,6 +98,15 @@ export async function renderLibrary(root) {
       </section>
     </div>
 
+    <div class="bulk" id="bulk" hidden>
+      <b id="bulk-n">0</b> seleccionada(s) →
+      <label class="sr-only" for="bulk-course">Asignatura destino</label>
+      <input class="input" id="bulk-course" list="bulk-dl" placeholder="Asignatura (o solo el número: 03)…" maxlength="120">
+      <datalist id="bulk-dl">${[...new Set([...state.catalog.map((c) => c.label), ...state.courses.map((c) => c.course).filter(Boolean)])].map((c) => html`<option value="${c}"></option>`)}</datalist>
+      <button class="btn primary sm" id="bulk-go" type="button">Mover</button>
+      <button class="btn ghost sm" id="bulk-none" type="button" style="color:inherit">Quitar asignatura</button>
+    </div>
+
     <div class="controls chip-row" style="margin-bottom:16px;justify-content:space-between">
       <div class="chip-row filters" role="group" aria-label="Filtrar por estado">
         ${[['all', 'Todas'], ['new', 'Nuevas'], ['seen', 'Vistas'], ['processed', 'Procesadas']].map(([k, l]) =>
@@ -121,7 +131,7 @@ export async function renderLibrary(root) {
               <div class="meter-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
               <small>${done} de ${items.length} con apuntes</small></div>
           </div>
-          <table><thead><tr><th>Clase</th><th class="hide-sm">Fecha</th><th class="hide-sm">Duración</th><th>Material</th><th>Estado</th><th></th></tr></thead>
+          <table><thead><tr><th class="sel"><input type="checkbox" data-sel-all aria-label="Seleccionar todas las clases de ${course || 'sin asignatura'}"></th><th>Clase</th><th class="hide-sm">Fecha</th><th class="hide-sm">Duración</th><th>Material</th><th>Estado</th><th></th></tr></thead>
             <tbody>${items.map(row)}</tbody></table>
         </section>`;
       })}
@@ -137,6 +147,28 @@ export async function renderLibrary(root) {
   };
   root.querySelectorAll('[data-ingest]').forEach((b) => b.addEventListener('click', () => doIngest(b)));
   root.querySelector('[data-clear-course]')?.addEventListener('click', () => setCourse(''));
+  // Bulk assignment to a course
+  const bulk = root.querySelector('#bulk');
+  const selected = () => [...root.querySelectorAll('[data-sel]:checked')].map((b) => Number(b.dataset.sel));
+  const syncBulk = () => { const n = selected().length; bulk.hidden = n === 0; root.querySelector('#bulk-n').textContent = String(n); };
+  root.addEventListener('change', (e) => {
+    if (e.target.matches('[data-sel-all]')) {
+      e.target.closest('table').querySelectorAll('[data-sel]').forEach((b) => { b.checked = e.target.checked; });
+    }
+    if (e.target.matches('[data-sel], [data-sel-all]')) syncBulk();
+  });
+  const assign = async (course) => {
+    try {
+      const res = await api('/api/recordings/assign', { method: 'POST', body: { ids: selected(), course } });
+      toast(`${res.updated} clase(s) → ${res.course || 'sin asignatura'}`);
+      await refreshMeta(); await renderRoute();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  root.querySelector('#bulk-go').addEventListener('click', () => {
+    const v = root.querySelector('#bulk-course').value.trim();
+    if (v) assign(v); else toast('Escribe o elige una asignatura', 'err');
+  });
+  root.querySelector('#bulk-none').addEventListener('click', () => assign('__none__'));
   root.querySelectorAll('.filter-btn').forEach((b) => b.addEventListener('click', () => { filter = b.dataset.filter; renderRoute(); }));
   root.querySelectorAll('[data-process]').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true; b.textContent = '⏳ Procesando…';

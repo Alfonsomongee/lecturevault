@@ -242,6 +242,24 @@ describe('Dashboard API', () => {
       await send('PATCH', `/api/recordings/${recId}`, { course: 'Simulación' });
     });
 
+    it('exposes the course catalog and moves classes in bulk, resolving short aliases', async () => {
+      fs.copyFileSync(path.resolve('courses.example.json'), path.join(tmp, 'courses.json'));
+      const meta = (await get('/api/meta')).json;
+      expect(meta.catalog).toHaveLength(10);
+      expect(meta.catalog[4].label).toBe('05MUIN Sistemas de automatización y control');
+
+      const moved = await send('POST', '/api/recordings/assign', { ids: [recId], course: '05' });
+      expect(moved.json).toEqual({ updated: 1, course: '05MUIN Sistemas de automatización y control' });
+      expect((await get(`/api/recordings/${recId}`)).json.recording.course).toContain('05MUIN');
+      expect((await send('PATCH', `/api/recordings/${recId}`, { course: '6' })).json.recording.course).toContain('06MUIN');
+
+      expect((await send('POST', '/api/recordings/assign', { ids: [], course: '05' })).status).toBe(400);
+      expect((await send('POST', '/api/recordings/assign', { ids: ['x'], course: '05' })).status).toBe(400);
+      expect((await send('POST', '/api/recordings/assign', { ids: [recId], course: '__none__' })).json.course).toBe('');
+      await send('PATCH', `/api/recordings/${recId}`, { course: 'Simulación' });
+      fs.rmSync(path.join(tmp, 'courses.json'));
+    });
+
     it('answers 429 with a useful message when the quota endpoints are hammered', async () => {
       let last: Res | undefined;
       for (let i = 0; i < 8; i++) last = await send('POST', '/api/ingest', {});

@@ -27,13 +27,13 @@ const audioTime = (page: import('@playwright/test').Page) =>
 const audioReady = (page: import('@playwright/test').Page) =>
   page.waitForFunction(() => ((document.querySelector('audio') as HTMLAudioElement | null)?.readyState ?? 0) >= 1);
 
-let demo: Fixture;
+let demo: Fixture & { dataDir: string };
 let empty: Fixture;
 let mallado: number;
 
 test.beforeAll(async () => {
   const seeded = seedDemo(path.join(tmp, 'demo'), logger);
-  demo = await boot(new DatabaseManager(seeded.dbPath, logger), seeded.dataDir);
+  demo = { ...(await boot(new DatabaseManager(seeded.dbPath, logger), seeded.dataDir)), dataDir: seeded.dataDir };
   mallado = demo.db.getRecordingByTranscriptId('simulacion_clase2_mallado')!.id;
   empty = await boot(new DatabaseManager(path.join(tmp, 'empty.db'), logger), path.join(tmp, 'empty-data'));
 });
@@ -72,6 +72,19 @@ test.describe('Library', () => {
     await expect(page.locator('.course-block')).toHaveCount(3);
     await expect(page.locator('.course-block', { hasText: 'Simulación FEM' })).toContainText('2 de 3 con apuntes');
     await expect(page.locator('.mini-alert').first()).toBeVisible();
+  });
+
+  test('bulk-assigns selected classes to a catalog subject by short number', async ({ page }) => {
+    fs.copyFileSync(path.resolve('courses.example.json'), path.join(demo.dataDir, 'courses.json'));
+    await page.goto(demo.url);
+    await expect(page.locator('.course-link', { hasText: '07MUIN' })).toBeVisible(); // catalog subjects show even when empty
+    const row = page.locator('tr', { hasText: 'Ensayo de tracción' });
+    await row.locator('[data-sel]').check();
+    await expect(page.locator('#bulk')).toBeVisible();
+    await page.locator('#bulk-course').fill('07');
+    await page.locator('#bulk-go').click();
+    await expect(page.locator('.course-block', { hasText: '07MUIN' })).toContainText('Ensayo de tracción');
+    await expect(page.locator('.course-link', { hasText: '07MUIN' })).toContainText('1');
   });
 
   test('filters by course from the sidebar and by status', async ({ page }) => {

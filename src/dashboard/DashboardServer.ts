@@ -28,6 +28,7 @@ import { findPlaybackAudio } from '../library/audio.js';
 import { segmentsToVtt } from '../library/transcript-files.js';
 import { buildAnkiTsv, buildIcs } from '../study/exporters.js';
 import { parseIso } from '../study/dates.js';
+import { CourseCatalog, courseLabel } from '../library/courses.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -202,6 +203,12 @@ export class DashboardServer {
     return typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined;
   }
 
+  /** The student's subject list (data/courses.json); read per request, it is tiny and editable by hand. */
+  private catalogPayload() {
+    const catalog = CourseCatalog.load(this.dataDir);
+    return catalog.courses.map((c) => ({ code: c.code, name: c.name, teacher: c.teacher ?? '', label: courseLabel(c) }));
+  }
+
   /** `?course=` filter: absent/blank → all courses; "__none__" → recordings without a course. */
   private course(value: unknown): string | undefined {
     const text = this.str(value, 80);
@@ -234,6 +241,7 @@ export class DashboardServer {
         recordings,
         stats: { ...this.db.getStats(), ...this.study.getStudyStats() },
         courses: this.db.getCourses(),
+        catalog: this.catalogPayload(),
         ai: this.client.hasKey,
         timestamp: new Date().toISOString(),
       });
@@ -248,6 +256,7 @@ export class DashboardServer {
       res.json({
         stats: { ...this.db.getStats(), ...this.study.getStudyStats() },
         courses: this.db.getCourses(),
+        catalog: this.catalogPayload(),
         ai: this.client.hasKey,
       });
     }));
@@ -271,13 +280,29 @@ export class DashboardServer {
       const course = typeof req.body?.course === 'string' ? req.body.course.trim().slice(0, 80) : undefined;
       const date = req.body?.date;
       if (course === undefined && date === undefined) throw new HttpError(400, 'Falta "course" o "date"');
-      if (course !== undefined) this.db.setCourse(rec.id, course === NO_COURSE ? '' : course);
+      if (course !== undefined) this.db.setCourse(rec.id, course === NO_COURSE ? '' : CourseCatalog.load(this.dataDir).resolve(course));
       if (date !== undefined) {
         // The class date anchors relative deadlines ("hasta el día 20"), so it must be a real calendar day
         if (typeof date !== 'string' || !parseIso(date)) throw new HttpError(400, 'Fecha no válida (usa AAAA-MM-DD)');
         this.db.setCreatedAt(rec.id, new Date(`${date}T10:00:00`).toISOString());
       }
       res.json({ recording: this.db.getRecordingById(rec.id) });
+    }));
+
+    // Move several classes to a course at once (typed value is resolved through the catalog: "03" → "03MUIN …")
+    api.post('/recordings/assign', this.wrap((req, res) => {
+      const ids: unknown = req.body?.ids;
+      const course = typeof req.body?.course === 'string' ? req.body.course.trim().slice(0, 120) : undefined;
+      if (!Array.isArray(ids) || ids.length === 0 || ids.length > 500 || course === undefined) {
+        throw new HttpError(400, 'Indica "ids" (1-500) y "course"');
+      }
+      const label = course === NO_COURSE ? '' : CourseCatalog.load(this.dataDir).resolve(course);
+      let updated = 0;
+      for (const raw of ids) {
+        const rec = this.db.getRecordingById(this.parseId(raw));
+        if (rec) { this.db.setCourse(rec.id, label); updated++; }
+      }
+      res.json({ updated, course: label });
     }));
 
     api.get('/recordings/:id/segments', this.wrap((req, res) => {

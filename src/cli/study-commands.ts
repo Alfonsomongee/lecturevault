@@ -22,6 +22,8 @@ import { seedDemo } from '../demo/seed.js';
 import { msToClock } from '../utils/time.js';
 import { parseIso } from '../study/dates.js';
 import { fold } from '../utils/text.js';
+import { CourseCatalog, courseLabel } from '../library/courses.js';
+import type { RecordingMetadata } from '../types.js';
 
 function args(options: Record<string, { type: 'string' | 'boolean'; short?: string }>) {
   return parseArgs({ args: process.argv.slice(3), options, allowPositionals: true, strict: false });
@@ -42,12 +44,23 @@ function printReport(title: string, r: PipelineReport): void {
   for (const e of r.errors) console.log(`     ⚠️  ${e}`);
 }
 
+/** Resolve a typed `--course` ("03", "03MUIN", "sistemas eléctricos") to the catalog label; unknown values pass through. */
+function courseArg(config: AppConfig, value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? CourseCatalog.load(config.dataDir).resolve(value) : undefined;
+}
+
+/** Fill in `course` on freshly scraped recordings when their title/URL carries a known course code. */
+export function withDetectedCourses(config: AppConfig, recordings: RecordingMetadata[]): RecordingMetadata[] {
+  const catalog = CourseCatalog.load(config.dataDir);
+  return recordings.map((r) => ({ ...r, course: r.course || catalog.detect(`${r.title} ${r.playbackUrl}`) || '' }));
+}
+
 /** `ingest` — load data/transcripts/* into SQLite (segments, search index, notes). */
 export async function runIngest(config: AppConfig, logger: Logger): Promise<void> {
   const { values } = args({ course: { type: 'string', short: 'c' } });
   const db = new DatabaseManager(config.databasePath, logger);
   try {
-    const result = new TranscriptIngestor(db, config.dataDir, logger).ingestAll({ course: values['course'] as string | undefined });
+    const result = new TranscriptIngestor(db, config.dataDir, logger).ingestAll({ course: courseArg(config, values['course']) });
     console.log('\n📥 Importación de transcripciones');
     console.log(`  Carpetas analizadas:   ${result.scanned}`);
     console.log(`  Vinculadas a Collab2:  ${result.linked}`);
@@ -108,7 +121,7 @@ export async function runSearch(config: AppConfig, logger: Logger): Promise<void
   }
   const db = new DatabaseManager(config.databasePath, logger);
   try {
-    const res = new SearchIndex(db.handle).search(query, { course: values['course'] as string | undefined, limit: 15 });
+    const res = new SearchIndex(db.handle).search(query, { course: courseArg(config, values['course']), limit: 15 });
     console.log(`\n🔎 "${query}"${res.corrected.length ? `  (¿quisiste decir ${res.corrected.map((c) => `"${c.to}"`).join(', ')}?)` : ''}\n`);
     if (res.hits.length === 0) console.log('  Sin resultados.');
     for (const h of res.hits) {
@@ -138,7 +151,7 @@ export async function runAsk(config: AppConfig, logger: Logger): Promise<void> {
     const rag = new Rag(db.handle, client, logger);
     if (client.hasKey) await rag.indexEmbeddings().catch((e) => console.log(`⚠️  Embeddings no disponibles: ${e.message}`));
 
-    const res = await rag.ask(question, { course: values['course'] as string | undefined });
+    const res = await rag.ask(question, { course: courseArg(config, values['course']) });
     console.log(`\n❓ ${question}\n`);
     if (res.answer) console.log(`${res.answer}\n`);
     else console.log('(Sin GEMINI_API_KEY: se muestran los fragmentos más relevantes, sin respuesta redactada.)\n');
@@ -162,7 +175,7 @@ function slug(text: string): string {
 /** `export` — Anki files, calendar and an Obsidian vault under data/exports. */
 export async function runExport(config: AppConfig, logger: Logger): Promise<void> {
   const { values } = args({ course: { type: 'string', short: 'c' } });
-  const only = values['course'] as string | undefined;
+  const only = courseArg(config, values['course']);
   const db = new DatabaseManager(config.databasePath, logger);
   try {
     const study = new StudyRepository(db.handle);
@@ -268,3 +281,45 @@ export async function finalizeTranscript(
 }
 
 export { printReport };
+
+/**
+ * `courses` — manage the subject catalog (data/courses.json).
+ *   courses init   create it from courses.example.json (your 10 MUIN subjects)
+ *   courses list   subjects with how many classes each has
+ *   courses auto   assign unassigned classes whose title/folder contains a course code
+ */
+export async function runCourses(config: AppConfig, logger: Logger): Promise<void> {
+  const sub = process.argv[3] ?? 'list';
+  const example = path.resolve('courses.example.json');
+  const catalog = () => CourseCatalog.load(config.dataDir);
+
+  if (sub === 'init') {
+    const created = CourseCatalog.init(config.dataDir, example);
+    console.log(created ? `\n✅ Creado ${path.join(config.dataDir, 'courses.json')} (edítalo a mano si cambian las asignaturas)\n` : '\nℹ️  Ya existe data/courses.json; no se ha tocado.\n');
+    return;
+  }
+
+  const db = new DatabaseManager(config.databasePath, logger);
+  try {
+    if (sub === 'auto') {
+      let n = 0;
+      for (const rec of db.getAllRecordings().filter((r) => !r.course)) {
+        const found = catalog().detect(`${rec.title} ${rec.transcript_id ?? ''} ${rec.playback_url}`);
+        if (found) { db.setCourse(rec.id, found); n++; console.log(`  ${rec.title} → ${found}`); }
+      }
+      console.log(`\n${n} clase(s) asignada(s). El resto se puede asignar en el dashboard (selección múltiple).\n`);
+      return;
+    }
+    const cat = catalog();
+    if (cat.courses.length === 0) {
+      console.log('\nNo hay catálogo. Ejecuta: npm run courses -- init\n');
+      return;
+    }
+    const counts = new Map(db.getCourses().map((c) => [c.course, c.count]));
+    console.log('\n📚 Asignaturas\n');
+    for (const c of cat.courses) console.log(`  ${courseLabel(c).padEnd(70)} ${String(counts.get(courseLabel(c)) ?? 0).padStart(3)} clases`);
+    console.log(`\n  Sin asignatura: ${counts.get('') ?? 0}\n`);
+  } finally {
+    db.close();
+  }
+}

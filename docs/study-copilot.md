@@ -73,12 +73,25 @@ Searching and brute-force semantic retrieval over that many chunks (~30 000) sti
 * with the dashboard running, use SQLite's online backup: `sqlite3 data/lecturevault.db ".backup backup.db"`.
 * Sync tools (Syncthing, OneDrive, …) are fine for `audio/`, `transcripts/` and `exports/`; avoid syncing a database that is open.
 
+## 2b. Subjects (course catalog)
+
+`npm run courses -- init` creates `data/courses.json` from `courses.example.json` (the ten MUIN subjects). Edit it by hand
+if subjects change. With it:
+
+* `--course 03`, `--course MUIN03` or `--course "sistemas eléctricos"` all mean `03MUIN Sistemas eléctricos…`
+  (ambiguous or unknown values are never guessed; unknown ones are stored as typed).
+* A course code or LMS id (`03MUIN`, `2026_10_A_51178`) in a recording title, URL or transcript folder name assigns
+  the subject automatically during `sync`, `batch:transcribe`, `ingest` and `npm run courses -- auto`.
+* The dashboard sidebar always lists the catalog subjects, and the library lets you tick several classes and move them
+  to a subject in one go.
+
 ## 3. Commands
 
 | Command | What it does |
 | :--- | :--- |
 | `npm run capture:and:transcribe -- --course "Simulación FEM"` | Capture + transcribe + index (+ AI if a key is set) |
 | `npm run batch:transcribe -- --speed 4 --silent` | Same for the whole queue; course glossary biases Whisper |
+| `npm run courses -- init \| list \| auto` | Subject catalog: create, counts, auto-assign by code |
 | `npm run ingest` | Import `data/transcripts/*` into SQLite (idempotent) |
 | `npm run study [-- --id N --force --upgrade-notes]` | Notes, alerts, flashcards, glossary, embeddings |
 | `npm run search -- "restricciones Ansys"` | Instant full-text search from the terminal |

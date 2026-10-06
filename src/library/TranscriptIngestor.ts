@@ -15,6 +15,7 @@ import { StudyRepository } from '../database/StudyRepository.js';
 import { readWhisperJson } from './transcript-files.js';
 import { chunkSegments, chunkNotes } from './chunker.js';
 import { isSafeTranscriptId, sanitizeRecordingId } from '../utils/ids.js';
+import { CourseCatalog } from './courses.js';
 import type { RecordingRow } from '../types.js';
 
 export interface IngestResult {
@@ -71,6 +72,7 @@ export class TranscriptIngestor {
 
     acc.scanned++;
     const transcript = readWhisperJson(jsonPath);
+    const catalog = CourseCatalog.load(this.dataDir);
 
     // 1. Find or create the recording this folder belongs to
     let recording = this.db.getRecordingByTranscriptId(transcriptId);
@@ -93,11 +95,13 @@ export class TranscriptIngestor {
         title: transcriptId.replace(/[_-]+/g, ' ').trim() || transcriptId,
         createdAt: transcript.timestamp || fs.statSync(jsonPath).mtime.toISOString(),
         durationSeconds: transcript.durationSeconds,
-        course,
+        course: course ? catalog.resolve(course) : catalog.detect(transcriptId.replace(/[_-]+/g, ' ')) ?? '',
       });
       acc.created++;
-    } else if (course && !recording.course) {
-      this.db.setCourse(recording.id, course);
+    } else if (!recording.course) {
+      // explicit --course wins; otherwise a course code in the title/folder name ("03MUIN…") is enough
+      const found = course ? catalog.resolve(course) : catalog.detect(`${recording.title} ${transcriptId}`);
+      if (found) this.db.setCourse(recording.id, found);
     }
 
     // 2. Segments (+ transcript chunks) only when the transcript really changed
