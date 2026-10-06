@@ -56,7 +56,6 @@ export class BrowserManager {
       },
       args: this.config.args || [
         '--autoplay-policy=no-user-gesture-required',
-        '--disable-web-security',
       ],
     });
 

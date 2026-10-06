@@ -575,7 +575,6 @@ async function runCaptureAndTranscribe(
       screenshotDir: config.screenshotDir,
       args: [
         '--autoplay-policy=no-user-gesture-required',
-        '--disable-web-security',
         ...(silent ? ['--mute-audio'] : []),
       ],
     },
@@ -957,7 +956,6 @@ Ejemplos:
       screenshotDir: config.screenshotDir,
       args: [
         '--autoplay-policy=no-user-gesture-required',
-        '--disable-web-security',
         ...(silent ? ['--mute-audio'] : []),
       ],
     },
