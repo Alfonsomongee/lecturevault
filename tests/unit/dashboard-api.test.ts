@@ -318,3 +318,155 @@ describe('Dashboard API', () => {
     });
   });
 });
+
+describe('Dashboard API: editing and persistence', () => {
+  let tmp: string;
+  let dbPath: string;
+  let db: DatabaseManager;
+  let server: DashboardServer;
+  let port: number;
+  let recId: number;
+  const origin = () => `http://127.0.0.1:${port}`;
+  const get = (url: string) => request(port, 'GET', url);
+  const send = (method: string, url: string, body?: unknown) => request(port, method, url, { body: body ?? {}, headers: { Origin: origin() } });
+
+  async function boot() {
+    db = new DatabaseManager(dbPath, logger);
+    server = new DashboardServer(db, { port: 0, dataDir: tmp }, logger);
+    await server.start();
+    port = server.getPort();
+  }
+  async function shutdown() { await server.stop(); db.close(); }
+
+  beforeAll(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lv-edit-'));
+    dbPath = path.join(tmp, 'lecturevault.db');
+    const dir = path.join(tmp, 'transcripts', 'clase1');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'audio'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'audio', 'clase1.wav'), Buffer.alloc(100));
+    fs.writeFileSync(path.join(dir, 'clase1.json'), JSON.stringify({
+      audioDurationSeconds: 60, timestamp: '2026-03-02T10:00:00Z',
+      segments: [{ id: 0, start: 0, end: 10, text: 'Texto de la clase sobre mallado.' }],
+    }));
+    fs.writeFileSync(path.join(dir, 'clase1.clean.md'), '# Original\n\nTexto original [00:05]');
+    await boot();
+    new TranscriptIngestor(db, tmp, logger).ingestAll();
+    recId = db.getRecordingByTranscriptId('clase1')!.id;
+  });
+  afterAll(async () => { await shutdown(); fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it('edits notes: history kept, file mirrored, search index refreshed, restorable', async () => {
+    const res = await send('PUT', `/api/recordings/${recId}/notes`, { markdown: '# Editado\n\nTexto nuevo sobre convergencia [00:05]' });
+    expect(res.json.versions).toHaveLength(1);
+    expect(fs.readFileSync(path.join(tmp, 'transcripts', 'clase1', 'clase1.clean.md'), 'utf8')).toContain('Editado');
+    expect((await get('/api/search?q=convergencia')).json.hits.some((h: any) => h.source === 'notes')).toBe(true);
+    expect((await get('/api/search?q=original')).json.hits.filter((h: any) => h.source === 'notes')).toHaveLength(0);
+
+    const versionId = res.json.versions[0].id;
+    expect((await get(`/api/recordings/${recId}/notes/versions/${versionId}`)).json.markdown).toContain('Original');
+    const back = await send('POST', `/api/recordings/${recId}/notes/restore`, { version: versionId });
+    expect(back.json.markdown).toContain('Original');
+    expect(back.json.versions.length).toBe(2); // the edited text is now history too
+    expect((await send('PUT', `/api/recordings/${recId}/notes`, { markdown: 5 })).status).toBe(400);
+  });
+
+  it('keeps preferences and playback position in the database across a server restart', async () => {
+    await send('PUT', '/api/settings', { theme: 'dark', course: '03MUIN' });
+    await send('PUT', `/api/recordings/${recId}/position`, { t: 123.9 });
+    expect((await send('PUT', '/api/settings', { evil: 'x' })).status).toBe(400);
+    expect((await send('PUT', '/api/settings', { theme: 'pink' })).status).toBe(400);
+    expect((await send('PUT', `/api/recordings/${recId}/position`, { t: -4 })).status).toBe(400);
+
+    await shutdown();
+    await boot();
+    expect((await get('/api/settings')).json.settings).toEqual({ theme: 'dark', course: '03MUIN' });
+    expect((await get(`/api/recordings/${recId}`)).json.position).toBe(123);
+  });
+
+  it('renames a class, adds and removes markers', async () => {
+    expect((await send('PATCH', `/api/recordings/${recId}`, { title: '  Clase 2 · Mallado  ' })).json.recording.title).toBe('Clase 2 · Mallado');
+    const m = await send('POST', `/api/recordings/${recId}/markers`, { t_ms: 4500, text: 'Repasar esto' });
+    expect(m.json.markers).toEqual([{ id: expect.any(Number), t_ms: 4500, text: 'Repasar esto' }]);
+    expect((await send('POST', `/api/recordings/${recId}/markers`, { t_ms: 1, text: ' ' })).status).toBe(400);
+    const removed = await send('DELETE', `/api/recordings/${recId}/markers/${m.json.markers[0].id}`);
+    expect(removed.json.markers).toEqual([]);
+  });
+
+  it('manual alerts survive AI regeneration and can be deleted; AI alerts cannot', async () => {
+    const created = await send('POST', `/api/recordings/${recId}/alerts`, { kind: 'deadline', text: 'Entregar informe', due_date: '2026-04-10' });
+    expect(created.json.alert).toMatchObject({ source: 'manual', confirmed: 1, due_date: '2026-04-10' });
+    expect((await send('POST', `/api/recordings/${recId}/alerts`, { kind: 'bogus', text: 'x' })).status).toBe(400);
+    expect((await send('POST', `/api/recordings/${recId}/alerts`, { kind: 'exam', text: 'x', due_date: '2026-02-31' })).status).toBe(400);
+
+    const study = new StudyRepository(db.handle);
+    study.replaceAlerts(recId, [{ kind: 'exam', text: 'IA', t_ms: 50_000 }]);
+    study.replaceAlerts(recId, []);
+    expect(study.listAlerts({ recordingId: recId }).map((a) => a.text)).toEqual(['Entregar informe']);
+    expect((await send('DELETE', `/api/alerts/${created.json.alert.id}`)).json.deleted).toBe(true);
+    study.replaceAlerts(recId, [{ kind: 'exam', text: 'IA', t_ms: 50_000 }]);
+    expect((await send('DELETE', `/api/alerts/${study.listAlerts({ recordingId: recId })[0]!.id}`)).status).toBe(400);
+  });
+
+  it('flashcards: create, edit keeps the guid, validate cloze, archive AI cards for good', async () => {
+    const made = await send('POST', `/api/recordings/${recId}/flashcards`, { front: '¿Qué es el mallado?', back: 'Discretización', tag: 'fem tema' });
+    const card = made.json.flashcard;
+    expect(card).toMatchObject({ source: 'manual', tag: 'fem_tema' });
+    expect((await send('POST', `/api/recordings/${recId}/flashcards`, { front: '¿Qué es el mallado?', back: 'x' })).status).toBe(409);
+    expect((await send('POST', `/api/recordings/${recId}/flashcards`, { kind: 'cloze', front: 'Sin hueco' })).status).toBe(400);
+
+    const edited = await send('PATCH', `/api/flashcards/${card.id}`, { back: 'División en elementos' });
+    expect(edited.json.flashcard).toMatchObject({ back: 'División en elementos', guid: card.guid });
+    expect((await send('PATCH', `/api/flashcards/${card.id}`, { kind: 'cloze' })).status).toBe(400);
+
+    const study = new StudyRepository(db.handle);
+    study.upsertFlashcards(recId, [{ kind: 'basic', front: 'Pregunta IA', back: 'Resp' }]);
+    const ai = study.listFlashcards({ recordingId: recId }).find((c) => c.front === 'Pregunta IA')!;
+    await send('DELETE', `/api/flashcards/${ai.id}`);
+    study.upsertFlashcards(recId, [{ kind: 'basic', front: 'Pregunta IA', back: 'Resp' }]); // regeneration
+    expect(study.listFlashcards({ recordingId: recId }).some((c) => c.front === 'Pregunta IA')).toBe(false);
+    expect((await get('/api/recordings')).json.recordings.find((r: any) => r.id === recId).flashcard_count).toBe(1);
+    await send('DELETE', `/api/flashcards/${card.id}`);
+    expect(study.getFlashcard(card.id)).toBeUndefined();
+  });
+
+  it('lists what still has to be captured, with the exact command', async () => {
+    fs.copyFileSync(path.resolve('courses.example.json'), path.join(tmp, 'courses.json'));
+    db.upsertRecording({ collabId: 'AbC-123/xyz', title: 'Clase 4 Térmica', createdAt: '2026-10-05T10:00:00', durationSeconds: 3600, playbackUrl: '', course: '08MUIN Ingeniería térmica y de fluidos' });
+    const { pending, batch } = (await get('/api/pending')).json;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].command).toBe('npm run capture:and:transcribe -- --course 08MUIN --date 2026-10-05 --name AbC-123_xyz');
+    expect(batch).toContain('batch:transcribe');
+    expect(pending.some((p: any) => p.title.includes('Clase 2'))).toBe(false); // captured classes are not pending
+  });
+
+  it('removes a class: Collab2 rows keep their row but lose local data; local ones disappear; files optional', async () => {
+    const collab = db.getRecordingByCollabId('AbC-123/xyz')!;
+    expect((await send('DELETE', `/api/recordings/${collab.id}`)).json.removed).toBe('local-data');
+    expect(db.getRecordingById(collab.id)).toBeDefined();
+
+    const local = db.getRecordingByTranscriptId('clase1')!;
+    expect((await send('DELETE', `/api/recordings/${local.id}?files=1`)).json.removed).toBe('recording');
+    expect(db.getRecordingById(local.id)).toBeUndefined();
+    expect(fs.existsSync(path.join(tmp, 'transcripts', 'clase1'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'audio', 'clase1.wav'))).toBe(false);
+    expect((await send('DELETE', '/api/recordings/999999')).status).toBe(404);
+  });
+
+  it('creates a consistent backup, edits the catalog and reports system state', async () => {
+    const backup = await send('POST', '/api/backup');
+    expect(backup.json.bytes).toBeGreaterThan(0);
+    const copy = new DatabaseManager(backup.json.file, logger);
+    expect(copy.getAllRecordings().length).toBe(db.getAllRecordings().length);
+    copy.close();
+    const sys = (await get('/api/system')).json;
+    expect(sys.backups).toHaveLength(1);
+    expect(sys.ai).toBe(false);
+
+    const saved = await send('PUT', '/api/catalog', { courses: [{ code: 'X1', name: 'Física' }] });
+    expect(saved.json.courses).toEqual([{ code: 'X1', name: 'Física' }]);
+    expect((await get('/api/meta')).json.catalog[0].label).toBe('X1 Física');
+    expect((await send('PUT', '/api/catalog', { courses: [{ code: 'A', name: 'a' }, { code: 'a', name: 'b' }] })).status).toBe(400);
+    expect((await send('PUT', '/api/catalog', { courses: [{ code: '', name: 'b' }] })).status).toBe(400);
+  });
+});

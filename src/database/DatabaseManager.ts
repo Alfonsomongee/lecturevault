@@ -186,6 +186,29 @@ export class DatabaseManager {
     this.stmts.setTranscriptId.run(transcriptId, id);
   }
 
+  public setTitle(id: number, title: string): void {
+    this.db.prepare('UPDATE recordings SET title = ? WHERE id = ?').run(title, id);
+  }
+
+  /** Remove a recording and everything derived from it (cascade). */
+  public deleteRecording(id: number): void {
+    this.db.prepare('DELETE FROM recordings WHERE id = ?').run(id);
+  }
+
+  /**
+   * Forget the local capture of a Collab2 recording but keep the row (so the next sync does not
+   * re-add it as a stranger): derived data is deleted and the status returns to "new".
+   */
+  public resetLocalData(id: number): void {
+    const run = this.db.transaction(() => {
+      for (const table of ['segments', 'notes', 'notes_versions', 'alerts', 'flashcards', 'glossary', 'chunks', 'markers']) {
+        this.db.prepare(`DELETE FROM ${table} WHERE recording_id = ?`).run(id);
+      }
+      this.db.prepare("UPDATE recordings SET transcript_id = NULL, segments_hash = NULL, status = 'new' WHERE id = ?").run(id);
+    });
+    run();
+  }
+
   /** Correct the class date (local captures only know when they were transcribed) */
   public setCreatedAt(id: number, createdAt: string): void {
     this.db.prepare('UPDATE recordings SET created_at = ? WHERE id = ?').run(createdAt, id);

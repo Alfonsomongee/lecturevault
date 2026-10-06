@@ -11,13 +11,14 @@
  */
 
 import express from 'express';
+import fs from 'node:fs';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from 'pino';
 import type { DatabaseManager } from '../database/DatabaseManager.js';
-import { StudyRepository } from '../database/StudyRepository.js';
+import { StudyRepository, type AlertKind } from '../database/StudyRepository.js';
 import type { RecordingStatus } from '../types.js';
 import { SearchIndex } from '../search/SearchIndex.js';
 import { Rag } from '../search/Rag.js';
@@ -28,7 +29,9 @@ import { findPlaybackAudio } from '../library/audio.js';
 import { segmentsToVtt } from '../library/transcript-files.js';
 import { buildAnkiTsv, buildIcs } from '../study/exporters.js';
 import { parseIso } from '../study/dates.js';
-import { CourseCatalog, courseLabel } from '../library/courses.js';
+import { CourseCatalog, courseLabel, COURSES_FILE } from '../library/courses.js';
+import { chunkNotes } from '../library/chunker.js';
+import { isSafeTranscriptId, sanitizeRecordingId } from '../utils/ids.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,7 +139,7 @@ export class DashboardServer {
       next();
     });
 
-    this.app.use(express.json({ limit: '64kb' }));
+    this.app.use(express.json({ limit: '1mb' }));
 
     // Static UI + vendored libraries (no CDN: the dashboard works offline)
     const root = path.resolve(__dirname, '../..');
@@ -201,6 +204,19 @@ export class DashboardServer {
 
   private str(value: unknown, max = 200): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined;
+  }
+
+  /** Persist notes (history kept), mirror them to data/ and refresh the search chunks. */
+  private saveNotes(rec: { id: number; transcript_id: string | null }, markdown: string): void {
+    this.study.editNotes(rec.id, markdown);
+    this.study.replaceChunks(rec.id, 'notes', chunkNotes(markdown));
+    if (rec.transcript_id && isSafeTranscriptId(rec.transcript_id)) {
+      const dir = path.join(this.dataDir, 'transcripts', rec.transcript_id);
+      if (fs.existsSync(dir)) {
+        fs.writeFileSync(path.join(dir, `${rec.transcript_id}.clean.md`), markdown, 'utf8');
+        fs.writeFileSync(path.join(dir, `${rec.transcript_id}.clean.txt`), markdown, 'utf8');
+      }
+    }
   }
 
   /** The student's subject list (data/courses.json); read per request, it is tiny and editable by hand. */
@@ -271,6 +287,9 @@ export class DashboardServer {
         alerts: this.study.listAlerts({ recordingId: rec.id, includeDismissed: true }),
         flashcards: this.study.listFlashcards({ recordingId: rec.id }),
         glossary: this.study.listGlossaryForRecording(rec.id),
+        markers: this.study.listMarkers(rec.id),
+        position: Number(this.study.getSetting(`pos:${rec.id}`) ?? 0),
+        versions: this.study.listNoteVersions(rec.id),
         ai: this.client.hasKey,
       });
     }));
@@ -279,7 +298,9 @@ export class DashboardServer {
       const rec = this.recording(req);
       const course = typeof req.body?.course === 'string' ? req.body.course.trim().slice(0, 80) : undefined;
       const date = req.body?.date;
-      if (course === undefined && date === undefined) throw new HttpError(400, 'Falta "course" o "date"');
+      const title = typeof req.body?.title === 'string' ? req.body.title.trim().slice(0, 200) : undefined;
+      if (course === undefined && date === undefined && !title) throw new HttpError(400, 'Falta "course", "date" o "title"');
+      if (title) this.db.setTitle(rec.id, title);
       if (course !== undefined) this.db.setCourse(rec.id, course === NO_COURSE ? '' : CourseCatalog.load(this.dataDir).resolve(course));
       if (date !== undefined) {
         // The class date anchors relative deadlines ("hasta el día 20"), so it must be a real calendar day
@@ -432,6 +453,199 @@ export class DashboardServer {
         .type('text/tab-separated-values; charset=utf-8')
         .set('Content-Disposition', `attachment; filename="lecturevault-anki-${kind}.txt"`)
         .send(buildAnkiTsv(cards, kind));
+    }));
+
+
+    // ── Editing: everything the student can change is stored in SQLite (and mirrored to files where it applies)
+    api.delete('/recordings/:id', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const removeFiles = req.query['files'] === '1';
+      if (removeFiles && rec.transcript_id && isSafeTranscriptId(rec.transcript_id)) {
+        const id = rec.transcript_id;
+        for (const file of fs.existsSync(path.join(this.dataDir, 'audio')) ? fs.readdirSync(path.join(this.dataDir, 'audio')) : []) {
+          if (file === id + path.extname(file) || file === `raw-${id}.webm`) fs.rmSync(path.join(this.dataDir, 'audio', file), { force: true });
+        }
+        fs.rmSync(path.join(this.dataDir, 'transcripts', id), { recursive: true, force: true });
+      }
+      // A class listed by Collab2 keeps its row (the next sync would re-create it anyway); a purely local one goes away
+      if (rec.collab_id.startsWith('local:')) { this.db.deleteRecording(rec.id); res.json({ removed: 'recording' }); }
+      else { this.db.resetLocalData(rec.id); res.json({ removed: 'local-data' }); }
+    }));
+
+    api.put('/recordings/:id/notes', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const markdown = req.body?.markdown;
+      if (typeof markdown !== 'string' || markdown.length > 300_000) throw new HttpError(400, 'Apuntes no válidos');
+      this.saveNotes(rec, markdown);
+      res.json({ saved: true, versions: this.study.listNoteVersions(rec.id) });
+    }));
+
+    api.post('/recordings/:id/notes/restore', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const version = this.study.getNoteVersion(rec.id, this.parseId(req.body?.version));
+      if (!version) throw new HttpError(404, 'Versión no encontrada');
+      this.saveNotes(rec, version.markdown);
+      res.json({ markdown: version.markdown, versions: this.study.listNoteVersions(rec.id) });
+    }));
+
+    api.get('/recordings/:id/notes/versions/:version', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const version = this.study.getNoteVersion(rec.id, this.parseId(req.params['version']));
+      if (!version) throw new HttpError(404, 'Versión no encontrada');
+      res.json(version);
+    }));
+
+    api.put('/recordings/:id/position', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const t = Number(req.body?.t);
+      if (!Number.isFinite(t) || t < 0 || t > 86_400) throw new HttpError(400, 'Posición no válida');
+      this.study.setSetting(`pos:${rec.id}`, String(Math.floor(t)));
+      res.json({ saved: true });
+    }));
+
+    api.post('/recordings/:id/markers', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const text = this.str(req.body?.text, 500);
+      const t = Number(req.body?.t_ms);
+      if (!text || !Number.isFinite(t) || t < 0) throw new HttpError(400, 'Marcador no válido');
+      this.study.addMarker(rec.id, Math.round(t), text);
+      res.json({ markers: this.study.listMarkers(rec.id) });
+    }));
+
+    api.delete('/recordings/:id/markers/:marker', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      if (!this.study.deleteMarker(rec.id, this.parseId(req.params['marker']))) throw new HttpError(404, 'Marcador no encontrado');
+      res.json({ markers: this.study.listMarkers(rec.id) });
+    }));
+
+    api.post('/recordings/:id/alerts', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const kind = String(req.body?.kind);
+      const text = this.str(req.body?.text, 400);
+      const due = req.body?.due_date ? String(req.body.due_date) : null;
+      if (!['exam', 'deadline', 'grading', 'warning', 'formula'].includes(kind) || !text) throw new HttpError(400, 'Aviso no válido');
+      if (due && !parseIso(due)) throw new HttpError(400, 'Fecha no válida (usa AAAA-MM-DD)');
+      const t = Number.isFinite(Number(req.body?.t_ms)) ? Math.max(0, Math.round(Number(req.body.t_ms))) : 0;
+      res.json({ alert: this.study.createAlert(rec.id, { kind: kind as AlertKind, text, t_ms: t, due_date: due }) });
+    }));
+
+    api.delete('/alerts/:id', this.wrap((req, res) => {
+      if (!this.study.deleteAlert(this.parseId(req.params['id']))) throw new HttpError(400, 'Solo se pueden borrar avisos creados a mano (los demás se descartan)');
+      res.json({ deleted: true });
+    }));
+
+    const cardInput = (body: any, partial = false) => {
+      const kind: 'basic' | 'cloze' | undefined = body?.kind === 'cloze' ? 'cloze' : body?.kind === 'basic' ? 'basic' : partial ? undefined : 'basic';
+      const front = this.str(body?.front, 2000);
+      const back = typeof body?.back === 'string' ? body.back.trim().slice(0, 2000) : partial ? undefined : '';
+      const tag = typeof body?.tag === 'string' ? body.tag.trim().replace(/\s+/g, '_').slice(0, 40) : undefined;
+      if (!partial && !front) throw new HttpError(400, 'La tarjeta necesita anverso');
+      const effectiveKind = kind;
+      if (front && effectiveKind === 'cloze' && !/\{\{c\d+::.+?\}\}/.test(front)) throw new HttpError(400, 'Una tarjeta cloze necesita un hueco {{c1::respuesta}}');
+      if (!partial && effectiveKind === 'basic' && !back) throw new HttpError(400, 'La tarjeta necesita reverso');
+      return { kind: effectiveKind, front, back, tag };
+    };
+
+    api.post('/recordings/:id/flashcards', this.wrap((req, res) => {
+      const rec = this.recording(req);
+      const c = cardInput(req.body);
+      const card = this.study.createFlashcard(rec.id, { kind: c.kind as 'basic' | 'cloze', front: c.front!, back: c.back ?? '', tag: c.tag, t_ms: Math.max(0, Math.round(Number(req.body?.t_ms) || 0)) });
+      if (!card) throw new HttpError(409, 'Ya existe una tarjeta con ese anverso en esta clase');
+      res.json({ flashcard: card });
+    }));
+
+    api.patch('/flashcards/:id', this.wrap((req, res) => {
+      const id = this.parseId(req.params['id']);
+      const existing = this.study.getFlashcard(id);
+      if (!existing) throw new HttpError(404, 'Tarjeta no encontrada');
+      const c = cardInput(req.body, true);
+      const merged = { kind: c.kind ?? existing.kind, front: c.front ?? existing.front };
+      if (merged.kind === 'cloze' && !/\{\{c\d+::.+?\}\}/.test(merged.front)) throw new HttpError(400, 'Una tarjeta cloze necesita un hueco {{c1::respuesta}}');
+      res.json({ flashcard: this.study.updateFlashcard(id, { kind: c.kind, front: c.front, back: c.back, tag: c.tag }) });
+    }));
+
+    api.delete('/flashcards/:id', this.wrap((req, res) => {
+      if (!this.study.deleteFlashcard(this.parseId(req.params['id']))) throw new HttpError(404, 'Tarjeta no encontrada');
+      res.json({ deleted: true });
+    }));
+
+    // ── Pending: Collab2 classes with no local capture yet, with the exact command to run
+    api.get('/pending', this.wrap((_req, res) => {
+      const catalog = CourseCatalog.load(this.dataDir);
+      const pending = this.db.getAllRecordings().filter((r) => !r.transcript_id && !r.collab_id.startsWith('local:'));
+      const d = (iso: string) => { const x = new Date(iso); return Number.isNaN(x.getTime()) ? '' : `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+      res.json({
+        pending: pending.map((r) => {
+          const found = r.course ? catalog.find(r.course) : undefined;
+          const parts = ['npm run capture:and:transcribe --'];
+          if (found) parts.push(`--course ${found.code}`);
+          else if (r.course) parts.push(`--course "${r.course.replace(/"/g, '')}"`);
+          if (d(r.created_at)) parts.push(`--date ${d(r.created_at)}`);
+          parts.push(`--name ${sanitizeRecordingId(r.collab_id)}`);
+          return { id: r.id, title: r.title, course: r.course, created_at: r.created_at, duration_seconds: r.duration_seconds, command: parts.join(' ') };
+        }),
+        batch: 'npm run batch:transcribe -- --speed 4 --silent',
+      });
+    }));
+
+    // ── Settings, catalog, backup
+    const SETTING_KEYS = new Set(['theme', 'course']);
+    api.get('/settings', this.wrap((_req, res) => {
+      res.json({ settings: Object.fromEntries(Object.entries(this.study.getSettings()).filter(([k]) => SETTING_KEYS.has(k))) });
+    }));
+
+    api.put('/settings', this.wrap((req, res) => {
+      for (const [key, value] of Object.entries(req.body ?? {})) {
+        if (!SETTING_KEYS.has(key) || typeof value !== 'string' || value.length > 200) throw new HttpError(400, `Ajuste no válido: ${key}`);
+        if (key === 'theme' && !['light', 'dark', 'system'].includes(value)) throw new HttpError(400, 'Tema no válido');
+        this.study.setSetting(key, value);
+      }
+      res.json({ saved: true });
+    }));
+
+    api.get('/system', this.wrap((_req, res) => {
+      const dbPath = this.db.handle.name;
+      const dir = path.join(this.dataDir, 'backups');
+      res.json({
+        ai: this.client.hasKey,
+        model: this.client.model,
+        dataDir: this.dataDir,
+        dbPath,
+        dbBytes: fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0,
+        backups: fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.db')).sort().reverse().slice(0, 10) : [],
+        stats: { ...this.db.getStats(), ...this.study.getStudyStats() },
+      });
+    }));
+
+    api.post('/backup', this.limit('backup', 6), this.wrap(async (_req, res) => {
+      const dir = path.join(this.dataDir, 'backups');
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
+      const file = path.join(dir, `lecturevault-${stamp}.db`);
+      await this.db.handle.backup(file); // consistent online copy, safe while the server runs
+      const all = fs.readdirSync(dir).filter((f) => f.endsWith('.db')).sort();
+      for (const old of all.slice(0, Math.max(0, all.length - 10))) fs.rmSync(path.join(dir, old), { force: true });
+      res.json({ file, bytes: fs.statSync(file).size });
+    }));
+
+    api.get('/catalog', this.wrap((_req, res) => {
+      res.json({ courses: CourseCatalog.load(this.dataDir).courses });
+    }));
+
+    api.put('/catalog', this.wrap((req, res) => {
+      const list: unknown = req.body?.courses;
+      if (!Array.isArray(list) || list.length > 60) throw new HttpError(400, 'Catálogo no válido');
+      const clean = list.map((c: any) => ({
+        code: String(c?.code ?? '').trim().slice(0, 30),
+        name: String(c?.name ?? '').trim().slice(0, 160),
+        ...(c?.teacher ? { teacher: String(c.teacher).trim().slice(0, 120) } : {}),
+        ...(c?.lmsId ? { lmsId: String(c.lmsId).trim().slice(0, 60) } : {}),
+      }));
+      if (clean.some((c) => !c.code || !c.name)) throw new HttpError(400, 'Cada asignatura necesita código y nombre');
+      if (new Set(clean.map((c) => c.code.toLowerCase())).size !== clean.length) throw new HttpError(400, 'Hay códigos repetidos');
+      fs.mkdirSync(this.dataDir, { recursive: true });
+      fs.writeFileSync(path.join(this.dataDir, COURSES_FILE), JSON.stringify(clean, null, 2));
+      res.json({ courses: clean });
     }));
 
     api.use((_req, res) => {

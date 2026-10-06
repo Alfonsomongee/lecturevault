@@ -201,7 +201,7 @@ export class StudyRepository {
     );
     let inserted = 0;
     const run = this.db.transaction(() => {
-      this.db.prepare('DELETE FROM alerts WHERE recording_id = ? AND confirmed = 0 AND dismissed = 0').run(recordingId);
+      this.db.prepare("DELETE FROM alerts WHERE recording_id = ? AND source = 'ai' AND confirmed = 0 AND dismissed = 0").run(recordingId);
       // Alerts the user already decided on. A regenerated alert for the same moment (the model may
       // place it a few seconds off) is the same alert, not a new one.
       const kept = this.db
@@ -317,6 +317,7 @@ export class StudyRepository {
       where.push('r.course = ?');
       params.push(filter.course);
     }
+    where.push('f.archived = 0');
     if (filter.dueOnly) where.push("f.due_at <= datetime('now')");
 
     return this.db
@@ -509,8 +510,8 @@ export class StudyRepository {
                 (SELECT count(*) FROM segments s WHERE s.recording_id = r.id) AS segment_count,
                 EXISTS(SELECT 1 FROM notes n WHERE n.recording_id = r.id) AS has_notes,
                 (SELECT count(*) FROM alerts a WHERE a.recording_id = r.id AND a.dismissed = 0) AS alert_count,
-                (SELECT count(*) FROM flashcards f WHERE f.recording_id = r.id) AS flashcard_count,
-                (SELECT count(*) FROM flashcards f WHERE f.recording_id = r.id AND f.due_at <= datetime('now')) AS flashcards_due
+                (SELECT count(*) FROM flashcards f WHERE f.recording_id = r.id AND f.archived = 0) AS flashcard_count,
+                (SELECT count(*) FROM flashcards f WHERE f.recording_id = r.id AND f.archived = 0 AND f.due_at <= datetime('now')) AS flashcards_due
          FROM recordings r
          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
          ORDER BY r.created_at DESC`
@@ -524,8 +525,132 @@ export class StudyRepository {
       transcribed: n('SELECT count(DISTINCT recording_id) AS n FROM segments'),
       withNotes: n('SELECT count(DISTINCT recording_id) AS n FROM notes'),
       alerts: n('SELECT count(*) AS n FROM alerts WHERE dismissed = 0'),
-      flashcards: n('SELECT count(*) AS n FROM flashcards'),
-      flashcardsDue: n("SELECT count(*) AS n FROM flashcards WHERE due_at <= datetime('now')"),
+      flashcards: n('SELECT count(*) AS n FROM flashcards WHERE archived = 0'),
+      flashcardsDue: n("SELECT count(*) AS n FROM flashcards WHERE archived = 0 AND due_at <= datetime('now')"),
     };
+  }
+
+  // ── Settings (preferences + playback positions) ─────────────────────────
+
+  getSetting(key: string): string | undefined {
+    return (this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+      )
+      .run(key, value);
+  }
+
+  getSettings(prefix = ''): Record<string, string> {
+    const rows = this.db.prepare('SELECT key, value FROM settings WHERE key LIKE ?').all(`${prefix}%`) as { key: string; value: string }[];
+    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  }
+
+  // ── Notes: manual edits keep history ────────────────────────────────────
+
+  /** Save edited notes; the previous text is kept as a version (last 20). */
+  editNotes(recordingId: number, markdown: string): void {
+    const run = this.db.transaction(() => {
+      const current = this.getNotes(recordingId);
+      if (current && current.markdown !== markdown) {
+        this.db
+          .prepare('INSERT INTO notes_versions (recording_id, markdown, model) VALUES (?, ?, ?)')
+          .run(recordingId, current.markdown, current.model);
+        this.db
+          .prepare(
+            `DELETE FROM notes_versions WHERE recording_id = ? AND id NOT IN
+             (SELECT id FROM notes_versions WHERE recording_id = ? ORDER BY id DESC LIMIT 20)`
+          )
+          .run(recordingId, recordingId);
+      }
+      this.saveNotes(recordingId, markdown, 'manual', 'manual');
+    });
+    run();
+  }
+
+  listNoteVersions(recordingId: number): { id: number; model: string; created_at: string; chars: number }[] {
+    return this.db
+      .prepare('SELECT id, model, created_at, length(markdown) AS chars FROM notes_versions WHERE recording_id = ? ORDER BY id DESC')
+      .all(recordingId) as { id: number; model: string; created_at: string; chars: number }[];
+  }
+
+  getNoteVersion(recordingId: number, versionId: number): { id: number; markdown: string } | undefined {
+    return this.db
+      .prepare('SELECT id, markdown FROM notes_versions WHERE id = ? AND recording_id = ?')
+      .get(versionId, recordingId) as { id: number; markdown: string } | undefined;
+  }
+
+  // ── Markers ─────────────────────────────────────────────────────────────
+
+  listMarkers(recordingId: number): { id: number; t_ms: number; text: string }[] {
+    return this.db
+      .prepare('SELECT id, t_ms, text FROM markers WHERE recording_id = ? ORDER BY t_ms, id')
+      .all(recordingId) as { id: number; t_ms: number; text: string }[];
+  }
+
+  addMarker(recordingId: number, tMs: number, text: string): number {
+    return Number(this.db.prepare('INSERT INTO markers (recording_id, t_ms, text) VALUES (?, ?, ?)').run(recordingId, tMs, text).lastInsertRowid);
+  }
+
+  deleteMarker(recordingId: number, id: number): boolean {
+    return this.db.prepare('DELETE FROM markers WHERE id = ? AND recording_id = ?').run(id, recordingId).changes > 0;
+  }
+
+  // ── Manual alerts / flashcards ──────────────────────────────────────────
+
+  /** A hand-written alert: the user typed it, so it is born confirmed and is never replaced by the AI. */
+  createAlert(recordingId: number, input: AlertInput): AlertRow {
+    const id = Number(
+      this.db
+        .prepare(
+          `INSERT INTO alerts (recording_id, kind, text, quote, t_ms, due_date, date_text, confidence, confirmed, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'high', 1, 'manual')`
+        )
+        .run(recordingId, input.kind, input.text, input.quote ?? '', input.t_ms, input.due_date ?? null, input.date_text ?? '').lastInsertRowid
+    );
+    return this.getAlert(id)!;
+  }
+
+  deleteAlert(id: number): boolean {
+    return this.db.prepare("DELETE FROM alerts WHERE id = ? AND source = 'manual'").run(id).changes > 0;
+  }
+
+  createFlashcard(recordingId: number, input: FlashcardInput): FlashcardRow | undefined {
+    const guid = StudyRepository.cardGuid(recordingId, input.front);
+    const info = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO flashcards (recording_id, kind, front, back, tag, t_ms, guid, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'manual')`
+      )
+      .run(recordingId, input.kind, input.front, input.back, input.tag ?? '', input.t_ms ?? 0, guid);
+    if (info.changes === 0) return undefined; // same question already exists in this class
+    return this.db.prepare('SELECT * FROM flashcards WHERE id = ?').get(Number(info.lastInsertRowid)) as FlashcardRow;
+  }
+
+  getFlashcard(id: number): FlashcardRow | undefined {
+    return this.db.prepare('SELECT * FROM flashcards WHERE id = ?').get(id) as FlashcardRow | undefined;
+  }
+
+  /** The guid stays the same on edit, so Anki updates the card instead of duplicating it. */
+  updateFlashcard(id: number, patch: Partial<Pick<FlashcardInput, 'kind' | 'front' | 'back' | 'tag'>>): FlashcardRow | undefined {
+    const card = this.getFlashcard(id);
+    if (!card) return undefined;
+    this.db
+      .prepare('UPDATE flashcards SET kind = ?, front = ?, back = ?, tag = ? WHERE id = ?')
+      .run(patch.kind ?? card.kind, patch.front ?? card.front, patch.back ?? card.back, patch.tag ?? card.tag, id);
+    return this.getFlashcard(id);
+  }
+
+  /** Manual cards are removed; AI cards are archived so regenerating cannot resurrect them. */
+  deleteFlashcard(id: number): boolean {
+    const card = this.db.prepare('SELECT source FROM flashcards WHERE id = ?').get(id) as { source: string } | undefined;
+    if (!card) return false;
+    if (card.source === 'manual') this.db.prepare('DELETE FROM flashcards WHERE id = ?').run(id);
+    else this.db.prepare('UPDATE flashcards SET archived = 1 WHERE id = ?').run(id);
+    return true;
   }
 }

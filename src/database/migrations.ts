@@ -167,6 +167,45 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 3,
+    description: 'user state in SQLite: settings, note versions, markers, manual alerts/cards, archived cards',
+    up: (db) => {
+      db.exec(`
+        -- Preferences and playback positions live here, not in the browser, so they survive any browser change
+        CREATE TABLE settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Previous versions of the notes (kept when the user edits or the AI regenerates them)
+        CREATE TABLE notes_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+          markdown TEXT NOT NULL,
+          model TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX idx_notes_versions_recording ON notes_versions(recording_id, id);
+
+        -- The student's own bookmarks on the audio timeline
+        CREATE TABLE markers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+          t_ms INTEGER NOT NULL,
+          text TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX idx_markers_recording ON markers(recording_id, t_ms);
+
+        ALTER TABLE alerts ADD COLUMN source TEXT NOT NULL DEFAULT 'ai';
+        ALTER TABLE flashcards ADD COLUMN source TEXT NOT NULL DEFAULT 'ai';
+        -- Deleting an AI card archives it, so regenerating never brings it back
+        ALTER TABLE flashcards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+      `);
+    },
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
