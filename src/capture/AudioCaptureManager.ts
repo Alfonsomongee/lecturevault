@@ -13,6 +13,7 @@ import type { Logger } from 'pino';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { sanitizeRecordingId } from '../utils/ids.js';
 
 export interface AudioCaptureOptions {
   outputDir?: string;
@@ -105,8 +106,7 @@ export class AudioCaptureManager {
    * Sanitizes recording ID to prevent directory traversal.
    */
   public sanitizeRecordingId(id: string): string {
-    const cleaned = id.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_{2,}/g, '_');
-    return cleaned.slice(0, 80) || `recording-${Date.now()}`;
+    return sanitizeRecordingId(id);
   }
 
   /**

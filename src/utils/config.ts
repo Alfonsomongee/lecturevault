@@ -77,7 +77,10 @@ export function loadConfig(): AppConfig {
     diagnosticsDir: path.resolve(envStr('DIAGNOSTICS_DIR', './data/diagnostics')),
     enableDiagnostics: envBool('ENABLE_DIAGNOSTICS', false),
     screenshotDiagnostics: envBool('SCREENSHOT_DIAGNOSTICS', false),
+    dataDir: path.resolve(envStr('DATA_DIR', './data')),
     geminiApiKey: process.env['GEMINI_API_KEY']?.trim() || undefined,
+    geminiModel: envStr('GEMINI_MODEL', 'gemini-2.5-flash').trim(),
+    geminiEmbeddingModel: envStr('GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001').trim(),
     browserChannel: process.env['BROWSER_CHANNEL']?.trim() || undefined,
   };
 

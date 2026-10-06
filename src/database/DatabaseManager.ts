@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import type { RecordingMetadata, RecordingRow, RecordingStatus } from '../types.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runMigrations } from './migrations.js';
 
 export class DatabaseManager {
   private db: Database.Database;
@@ -16,6 +17,11 @@ export class DatabaseManager {
     updateStatus: Database.Statement;
     countAll: Database.Statement;
     countByStatus: Database.Statement;
+    getByRowId: Database.Statement;
+    getByTranscriptId: Database.Statement;
+    setCourse: Database.Statement;
+    setTranscriptId: Database.Statement;
+    insertLocal: Database.Statement;
   };
 
   /**
@@ -44,25 +50,15 @@ export class DatabaseManager {
    */
   private initialize(): void {
     this.db.pragma('journal_mode = WAL');
+    this.db.pragma('foreign_keys = ON');
 
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS recordings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        collab_id TEXT UNIQUE NOT NULL,
-        title TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        duration_seconds INTEGER NOT NULL DEFAULT 0,
-        playback_url TEXT NOT NULL DEFAULT '',
-        first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-        last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-        status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'seen', 'processed'))
-      );
+    const applied = runMigrations(this.db);
+    this.logger.debug({ applied }, 'Database initialized with WAL mode and schema');
+  }
 
-      CREATE INDEX IF NOT EXISTS idx_recordings_collab_id ON recordings(collab_id);
-      CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
-      CREATE INDEX IF NOT EXISTS idx_recordings_created_at ON recordings(created_at);
-    `);
-    this.logger.debug('Database initialized with WAL mode and schema');
+  /** Raw better-sqlite3 handle, shared with the study repositories (same connection). */
+  public get handle(): Database.Database {
+    return this.db;
   }
 
   /**
@@ -71,12 +67,13 @@ export class DatabaseManager {
   private prepareStatements() {
     return {
       upsert: this.db.prepare(`
-        INSERT INTO recordings (collab_id, title, created_at, duration_seconds, playback_url, status, first_seen_at, last_seen_at)
-        VALUES (@collab_id, @title, @created_at, @duration_seconds, @playback_url, 'new', datetime('now'), datetime('now'))
+        INSERT INTO recordings (collab_id, title, created_at, duration_seconds, playback_url, course, status, first_seen_at, last_seen_at)
+        VALUES (@collab_id, @title, @created_at, @duration_seconds, @playback_url, @course, 'new', datetime('now'), datetime('now'))
         ON CONFLICT(collab_id) DO UPDATE SET
           title = excluded.title,
           duration_seconds = excluded.duration_seconds,
           playback_url = excluded.playback_url,
+          course = CASE WHEN excluded.course != '' THEN excluded.course ELSE recordings.course END,
           last_seen_at = datetime('now')
       `),
       getById: this.db.prepare('SELECT * FROM recordings WHERE collab_id = ?'),
@@ -84,7 +81,15 @@ export class DatabaseManager {
       getByStatus: this.db.prepare('SELECT * FROM recordings WHERE status = ? ORDER BY created_at DESC'),
       updateStatus: this.db.prepare('UPDATE recordings SET status = ? WHERE collab_id = ?'),
       countAll: this.db.prepare('SELECT count(*) as count FROM recordings'),
-      countByStatus: this.db.prepare('SELECT count(*) as count FROM recordings WHERE status = ?')
+      countByStatus: this.db.prepare('SELECT count(*) as count FROM recordings WHERE status = ?'),
+      getByRowId: this.db.prepare('SELECT * FROM recordings WHERE id = ?'),
+      getByTranscriptId: this.db.prepare('SELECT * FROM recordings WHERE transcript_id = ?'),
+      setCourse: this.db.prepare('UPDATE recordings SET course = ? WHERE id = ?'),
+      setTranscriptId: this.db.prepare('UPDATE recordings SET transcript_id = ? WHERE id = ?'),
+      insertLocal: this.db.prepare(`
+        INSERT INTO recordings (collab_id, title, created_at, duration_seconds, playback_url, course, transcript_id, status)
+        VALUES (@collab_id, @title, @created_at, @duration_seconds, '', @course, @transcript_id, 'processed')
+      `),
     };
   }
 
@@ -101,7 +106,8 @@ export class DatabaseManager {
       title: metadata.title,
       created_at: metadata.createdAt,
       duration_seconds: metadata.durationSeconds,
-      playback_url: metadata.playbackUrl
+      playback_url: metadata.playbackUrl,
+      course: metadata.course ?? '',
     });
 
     return { isNew: !existing };
@@ -158,6 +164,58 @@ export class DatabaseManager {
    */
   public updateStatus(collabId: string, status: RecordingStatus): void {
     this.stmts.updateStatus.run(status, collabId);
+  }
+
+  /** Find a recording by its numeric primary key */
+  public getRecordingById(id: number): RecordingRow | undefined {
+    return this.stmts.getByRowId.get(id) as RecordingRow | undefined;
+  }
+
+  /** Find the recording linked to a transcript folder / audio stem */
+  public getRecordingByTranscriptId(transcriptId: string): RecordingRow | undefined {
+    return this.stmts.getByTranscriptId.get(transcriptId) as RecordingRow | undefined;
+  }
+
+  /** Assign a recording to a course / subject */
+  public setCourse(id: number, course: string): void {
+    this.stmts.setCourse.run(course.trim(), id);
+  }
+
+  /** Link a recording to its local transcript folder */
+  public setTranscriptId(id: number, transcriptId: string): void {
+    this.stmts.setTranscriptId.run(transcriptId, id);
+  }
+
+  /**
+   * Create a recording that exists only locally (captured manually, not listed in Collab2).
+   * Its collab_id is namespaced with "local:" so it can never collide with a Collab2 id.
+   */
+  public createLocalRecording(input: {
+    transcriptId: string;
+    title: string;
+    createdAt: string;
+    durationSeconds: number;
+    course?: string;
+  }): RecordingRow {
+    const info = this.stmts.insertLocal.run({
+      collab_id: `local:${input.transcriptId}`,
+      title: input.title,
+      created_at: input.createdAt,
+      duration_seconds: Math.round(input.durationSeconds),
+      course: input.course ?? '',
+      transcript_id: input.transcriptId,
+    });
+    return this.getRecordingById(Number(info.lastInsertRowid))!;
+  }
+
+  /** Distinct courses with how many recordings each one has */
+  public getCourses(): { course: string; count: number; totalSeconds: number }[] {
+    return this.db
+      .prepare(
+        `SELECT course, count(*) AS count, COALESCE(sum(duration_seconds), 0) AS totalSeconds
+         FROM recordings GROUP BY course ORDER BY course COLLATE NOCASE`
+      )
+      .all() as { course: string; count: number; totalSeconds: number }[];
   }
 
   /**

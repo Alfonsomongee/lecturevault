@@ -17,6 +17,8 @@ export interface RecordingMetadata {
   durationSeconds: number;
   /** Playback URL or reference */
   playbackUrl: string;
+  /** Optional course / subject; never overwritten by a re-sync when empty */
+  course?: string;
 }
 
 /** Recording row as stored in SQLite */
@@ -30,6 +32,10 @@ export interface RecordingRow {
   first_seen_at: string;
   last_seen_at: string;
   status: RecordingStatus;
+  /** Course / subject this recording belongs to ('' when unknown) */
+  course: string;
+  /** Folder name under data/transcripts (and audio stem) once captured */
+  transcript_id: string | null;
 }
 
 /** Application configuration loaded from environment */
@@ -51,7 +57,11 @@ export interface AppConfig {
   diagnosticsDir: string;
   enableDiagnostics: boolean;
   screenshotDiagnostics: boolean;
+  /** Root of local artifacts: audio/, transcripts/, exports/ (default ./data) */
+  dataDir: string;
   geminiApiKey?: string;
+  geminiModel: string;
+  geminiEmbeddingModel: string;
   browserChannel?: string;
 }
 
