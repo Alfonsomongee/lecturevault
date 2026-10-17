@@ -1,0 +1,13 @@
+[
+  { "code": "01MUIN", "name": "Gestión de Empresas e Ingeniería de Organización", "teacher": "Prof. Dr. Alejandro García", "lmsId": "2026_10_A_51176" },
+  { "code": "02MUIN", "name": "Ingeniería mecánica y diseño de máquinas", "teacher": "Dra. Carmen Martínez", "lmsId": "2026_10_A_51177" },
+  { "code": "03MUIN", "name": "Sistemas eléctricos y de producción de energía", "teacher": "Prof. Dr. Javier López", "lmsId": "2026_10_A_51178" },
+  { "code": "04MUIN", "name": "Tecnología electrónica e instrumentación", "teacher": "Dra. Elena Fernández", "lmsId": "2026_10_A_51179" },
+  { "code": "05MUIN", "name": "Sistemas de automatización y control", "teacher": "Prof. Dr. David Ruiz", "lmsId": "2026_10_A_51180" },
+  { "code": "06MUIN", "name": "Sistemas integrados de fabricación", "teacher": "Dr. Carlos Sánchez", "lmsId": "2026_10_A_51181" },
+  { "code": "07MUIN", "name": "Procesos químicos en la industria", "teacher": "Dra. Ana Gómez", "lmsId": "2026_10_A_51182" },
+  { "code": "08MUIN", "name": "Ingeniería térmica y de fluidos", "teacher": "Prof. Dr. Miguel Ángel Torres", "lmsId": "2026_10_A_51183" },
+  { "code": "09MUIN", "name": "Construcción y Arquitectura Industrial", "teacher": "Dra. Laura Morales" },
+  { "code": "10MUIN", "name": "Instalaciones industriales I", "teacher": "Prof. Dr. Roberto Navarro" }
+]
+

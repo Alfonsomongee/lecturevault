@@ -1,0 +1,60 @@
+{
+  "name": "lecturevault",
+  "version": "0.1.0",
+  "description": "Local-first academic recording assistant — capture, transcribe, and study from your Collab2 classes",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "sync": "tsx src/index.ts sync",
+    "accept:manual": "tsx src/index.ts accept-manual",
+    "inspect:player": "tsx src/index.ts inspect-player",
+    "check:hardware": "tsx src/utils/hardware.ts",
+    "capture:audio": "tsx src/index.ts capture-audio",
+    "capture:and:transcribe": "tsx src/index.ts capture-and-transcribe",
+    "batch:transcribe": "tsx src/index.ts batch-transcribe",
+    "transcribe:test": "tsx src/transcriber/transcribe-cli.ts",
+    "refine:transcript": "tsx src/ai/refine-cli.ts",
+    "ingest": "tsx src/index.ts ingest",
+    "courses": "tsx src/index.ts courses",
+    "study": "tsx src/index.ts study",
+    "search": "tsx src/index.ts search",
+    "ask": "tsx src/index.ts ask",
+    "export": "tsx src/index.ts export",
+    "optimize:audio": "tsx src/index.ts optimize-audio",
+    "demo": "tsx src/index.ts demo",
+    "serve": "tsx src/index.ts serve",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:coverage": "vitest run --coverage",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.6.0",
+    "dompurify": "^3.4.16",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.1",
+    "katex": "^0.19.0",
+    "marked": "^18.1.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "playwright": "^1.49.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "private": true
+}
